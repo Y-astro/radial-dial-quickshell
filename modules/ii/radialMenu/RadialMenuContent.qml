@@ -169,6 +169,67 @@ Item {
         restartBlossom()
     }
 
+    property var pendingAction: null
+
+    // ── Outside-to-Inside Collapse / Exit Animation System ────────────────────
+    SequentialAnimation {
+        id: collapseAnimation
+        running: false
+
+        // Step 1: Outer slices collapse inward (N down to 0)
+        ParallelAnimation {
+            NumberAnimation {
+                target: root
+                property: "revealProgress"
+                to: 0.0
+                duration: Math.max(120, root.sliceCount * 24)
+                easing.type: Easing.InCubic
+            }
+            NumberAnimation {
+                target: root
+                property: "scale"
+                to: 0.82
+                duration: Math.max(130, root.sliceCount * 24 + 20)
+                easing.type: Easing.InQuad
+            }
+            NumberAnimation {
+                target: root
+                property: "opacity"
+                to: 0.0
+                duration: Math.max(130, root.sliceCount * 24 + 20)
+                easing.type: Easing.InQuad
+            }
+        }
+
+        // Step 2: Center Close/Back hub pops down to 0
+        NumberAnimation {
+            target: root
+            property: "hubScale"
+            to: 0.0
+            duration: 80
+            easing.type: Easing.InBack
+            easing.overshoot: 1.2
+        }
+
+        ScriptAction {
+            script: {
+                GlobalStates.radialMenuOpen = false
+                if (typeof root.pendingAction === "function") {
+                    const act = root.pendingAction
+                    root.pendingAction = null
+                    act()
+                }
+            }
+        }
+    }
+
+    function closeAnimated(callback) {
+        if (collapseAnimation.running) return
+        blossomAnimation.stop()
+        pendingAction = (typeof callback === "function") ? callback : null
+        collapseAnimation.restart()
+    }
+
     // Key handling (Escape to go back or close)
     function handleEscape(): bool {
         if (currentTier !== "main") {
@@ -177,7 +238,7 @@ Item {
             centerHovered = false
             return true
         }
-        GlobalStates.radialMenuOpen = false
+        closeAnimated()
         return true
     }
 
@@ -431,6 +492,12 @@ Item {
                 return
             }
 
+            // Click outside dial radius -> close with outside-to-inside animation
+            if (distSq > (root.outerRadius + 14) * (root.outerRadius + 14)) {
+                root.closeAnimated()
+                return
+            }
+
             // Click on active slice
             if (root.hoveredIndex >= 0 && root.hoveredIndex < root.sliceCount) {
                 const slice = root.currentSlices[root.hoveredIndex]
@@ -438,8 +505,7 @@ Item {
                 if (slice.hasSubTier) {
                     root.currentTier = slice.subTierType
                 } else if (typeof slice.action === "function") {
-                    slice.action()
-                    GlobalStates.radialMenuOpen = false
+                    root.closeAnimated(slice.action)
                 }
             }
         }

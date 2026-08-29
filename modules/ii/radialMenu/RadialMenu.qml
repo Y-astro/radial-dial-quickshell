@@ -15,6 +15,7 @@ Scope {
     id: root
 
     Loader {
+        id: menuLoader
         active: GlobalStates.radialMenuOpen
 
         sourceComponent: PanelWindow {
@@ -36,11 +37,18 @@ Scope {
                 right: true
             }
 
-            // Click outside the dial closes the menu
+            Connections {
+                target: GlobalStates
+                function onRadialMenuCloseRequested() {
+                    radialContent.closeAnimated()
+                }
+            }
+
+            // Click outside the dial closes the menu with outside-to-inside animation
             MouseArea {
                 anchors.fill: parent
                 acceptedButtons: Qt.LeftButton | Qt.RightButton | Qt.MiddleButton
-                onClicked: GlobalStates.radialMenuOpen = false
+                onClicked: radialContent.closeAnimated()
             }
 
             RadialMenuContent {

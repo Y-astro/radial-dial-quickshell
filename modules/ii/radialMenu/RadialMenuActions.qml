@@ -19,10 +19,11 @@ Singleton {
 
     // Determine context based on active window properties
     function resolveContext(win) {
-        if (!win || !win.class) return "default"
-        const c = String(win.class).toLowerCase()
-        if (c.includes("kitty") || c.includes("konsole") || c.includes("alacritty")) return "kitty"
-        if (/firefox|brave|chrome|chromium|thorium|zen|floorp|vivaldi|opera|edge/.test(c)) return "browser"
+        if (!win) return "default"
+        const c = String(win.class || win.initialClass || "").toLowerCase()
+        const title = String(win.title || "").toLowerCase()
+        if (c.includes("kitty") || c.includes("konsole") || c.includes("alacritty") || c.includes("foot")) return "kitty"
+        if (/firefox|brave|chrome|chromium|thorium|zen|floorp|vivaldi|opera|edge|librewolf|waterfox/.test(c) || /firefox|brave|chrome|chromium|zen|librewolf/.test(title)) return "browser"
         return "default"
     }
 
@@ -32,6 +33,30 @@ Singleton {
         const wsName = win.workspace.name || ""
         const wsId = win.workspace.id ?? 0
         return wsName.startsWith("special") || wsId < 0
+    }
+
+    // Send keystroke reliably to a target window
+    function sendBrowserKey(winAddress: string, keyCmd: string) {
+        const addr = winAddress ? `address:${winAddress}` : ""
+        const focusCmd = addr ? `hyprctl dispatch focuswindow "${addr}" 2>/dev/null; ` : ""
+        const cmd = `${focusCmd}sleep 0.05; ${keyCmd}`
+        exec(cmd)
+    }
+
+    // Switch to browser tab by index (1-based)
+    function switchToBrowserTab(tabIdx: int, winAddress: string) {
+        let keyCmd = ""
+        if (tabIdx >= 1 && tabIdx <= 8) {
+            keyCmd = `wtype -M alt -k ${tabIdx} -m alt`
+        } else if (tabIdx === 9) {
+            keyCmd = "wtype -M alt -k 9 -m alt"
+        } else {
+            keyCmd = "wtype -M alt -k 1 -m alt"
+            for (let i = 1; i < tabIdx; i++) {
+                keyCmd += " && sleep 0.04 && wtype -M ctrl -k Tab -m ctrl"
+            }
+        }
+        sendBrowserKey(winAddress, keyCmd)
     }
 
     // Resolve Terminal (Kitty/Konsole) CWD and open Dolphin
@@ -151,21 +176,6 @@ else:
         }
     }
 
-    // Switch to browser tab by index (1-based)
-    function switchToBrowserTab(tabIdx) {
-        if (tabIdx >= 1 && tabIdx <= 8) {
-            exec(`sleep 0.15 && wtype -M alt -k ${tabIdx} -m alt`)
-        } else if (tabIdx === 9) {
-            exec("sleep 0.15 && wtype -M alt -k 9 -m alt")
-        } else {
-            let cmd = "sleep 0.15 && wtype -M alt -k 1 -m alt"
-            for (let i = 1; i < tabIdx; i++) {
-                cmd += " && sleep 0.04 && wtype -M ctrl -k Tab -m ctrl"
-            }
-            exec(cmd)
-        }
-    }
-
     // Get slices for current state
     function getSlicesFor(tier: string, context: string, win) {
         if (tier === "scratchpad") {
@@ -182,6 +192,7 @@ else:
         }
 
         if (tier === "browsertabs") {
+            const winAddr = win?.address || ""
             const rawTabs = GlobalStates.browserTabsList
             if (rawTabs && Array.isArray(rawTabs) && rawTabs.length > 0) {
                 return rawTabs.map((t, i) => {
@@ -190,15 +201,19 @@ else:
                         label: t.title || `Tab ${idx}`,
                         icon: idx <= 8 ? `counter_${idx}` : "tab",
                         hasSubTier: false,
-                        action: () => switchToBrowserTab(idx)
+                        action: () => switchToBrowserTab(idx, winAddr)
                     }
                 })
             }
             return [
-                { label: "Tab 1", icon: "counter_1", action: () => switchToBrowserTab(1) },
-                { label: "Tab 2", icon: "counter_2", action: () => switchToBrowserTab(2) },
-                { label: "Tab 3", icon: "counter_3", action: () => switchToBrowserTab(3) },
-                { label: "Tab 4", icon: "counter_4", action: () => switchToBrowserTab(4) }
+                { label: "Tab 1", icon: "counter_1", action: () => switchToBrowserTab(1, winAddr) },
+                { label: "Tab 2", icon: "counter_2", action: () => switchToBrowserTab(2, winAddr) },
+                { label: "Tab 3", icon: "counter_3", action: () => switchToBrowserTab(3, winAddr) },
+                { label: "Tab 4", icon: "counter_4", action: () => switchToBrowserTab(4, winAddr) },
+                { label: "Tab 5", icon: "counter_5", action: () => switchToBrowserTab(5, winAddr) },
+                { label: "Tab 6", icon: "counter_6", action: () => switchToBrowserTab(6, winAddr) },
+                { label: "Tab 7", icon: "counter_7", action: () => switchToBrowserTab(7, winAddr) },
+                { label: "Tab 8", icon: "counter_8", action: () => switchToBrowserTab(8, winAddr) }
             ]
         }
 
@@ -223,12 +238,12 @@ else:
                 {
                     label: "Clear Terminal",
                     icon: "mop",
-                    action: () => exec("sleep 0.12 && wtype -M ctrl -k l -m ctrl")
+                    action: () => exec("sleep 0.05 && wtype -M ctrl -k l -m ctrl")
                 },
                 {
                     label: "Run agy",
                     icon: "robot_2",
-                    action: () => exec("sleep 0.12 && wtype 'agy --dangerously-skip-permissions' -k Return")
+                    action: () => exec("sleep 0.05 && wtype 'agy --dangerously-skip-permissions' -k Return")
                 },
                 {
                     label: "Open CWD in Dolphin",
@@ -240,6 +255,7 @@ else:
 
         // Browser context (with Scratchpad Manager & Tabs ring)
         if (context === "browser") {
+            const winAddr = win?.address || ""
             const tabCount = GlobalStates.browserTabsList ? GlobalStates.browserTabsList.length : 0
             const tabSliceLabel = tabCount > 0 ? `Switch Tab (${tabCount})` : "Switch Tab"
             return [
@@ -254,22 +270,22 @@ else:
                 {
                     label: "New Tab",
                     icon: "tab",
-                    action: () => exec("sleep 0.15 && wtype -M ctrl -k t -m ctrl")
+                    action: () => sendBrowserKey(winAddr, "wtype -M ctrl -k t -m ctrl")
                 },
                 {
                     label: "Close Tab",
                     icon: "tab_close",
-                    action: () => exec("sleep 0.15 && wtype -M ctrl -k w -m ctrl")
+                    action: () => sendBrowserKey(winAddr, "wtype -M ctrl -k w -m ctrl")
                 },
                 {
                     label: "Duplicate Tab",
                     icon: "tab_duplicate",
-                    action: () => exec("sleep 0.15 && wtype -M ctrl -k l -m ctrl && sleep 0.08 && wtype -M ctrl -k c -m ctrl && sleep 0.08 && wtype -M ctrl -k t -m ctrl && sleep 0.12 && wtype -M ctrl -k v -m ctrl && sleep 0.08 && wtype -k Return")
+                    action: () => sendBrowserKey(winAddr, "wtype -M alt -k d -m alt && sleep 0.06 && wtype -M alt -k Return -m alt")
                 },
                 {
                     label: "Reopen Closed Tab",
                     icon: "history",
-                    action: () => exec("sleep 0.15 && wtype -M ctrl -M shift -k t -m shift -m ctrl")
+                    action: () => sendBrowserKey(winAddr, "wtype -M ctrl -M shift -k t -m shift -m ctrl")
                 }
             ]
         }
@@ -280,13 +296,11 @@ else:
             {
                 label: "Terminal",
                 icon: "terminal",
-                hasSubTier: false,
                 action: () => launchKitty()
             },
             {
                 label: "Wallpapers",
                 icon: "wallpaper",
-                hasSubTier: false,
                 action: () => {
                     GlobalStates.wallpaperSelectorTarget = "wallpaper"
                     GlobalStates.wallpaperSelectorOpen = true
@@ -295,14 +309,14 @@ else:
             {
                 label: "Launch btop",
                 icon: "monitoring",
-                hasSubTier: false,
                 action: () => launchBtop()
             },
             {
                 label: "Session",
                 icon: "power_settings_new",
-                hasSubTier: false,
-                action: () => { GlobalStates.sessionOpen = true }
+                action: () => {
+                    GlobalStates.sessionOpen = true
+                }
             },
             {
                 label: "File Jump",
@@ -314,7 +328,6 @@ else:
             {
                 label: "Calculator",
                 icon: "calculate",
-                hasSubTier: false,
                 action: () => launchCalculator()
             }
         ]

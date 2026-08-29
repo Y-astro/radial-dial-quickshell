@@ -479,20 +479,19 @@ Item {
             Behavior on x { NumberAnimation { duration: 110; easing.type: Easing.OutQuad } }
             Behavior on y { NumberAnimation { duration: 110; easing.type: Easing.OutQuad } }
 
-            // ── Material Symbol Icon (Subtle Scale Transform & Spring Transition) ──
+            // ── Material Symbol Icon (Pixel-Crisp Native Vector Glyph Sizing) ──
             MaterialSymbol {
                 anchors.centerIn: parent
                 text: sliceOverlay.sliceData ? sliceOverlay.sliceData.icon : ""
-                iconSize: 26
+                iconSize: sliceOverlay.isHovered ? 30 : 25
                 fill: sliceOverlay.isHovered ? 1 : 0
                 color: sliceOverlay.isHovered
                     ? Appearance.colors.colOnPrimary
                     : Qt.rgba(1.0, 1.0, 1.0, 0.95)
 
-                scale: sliceOverlay.isHovered ? 1.18 : 1.0
-                Behavior on scale {
+                Behavior on iconSize {
                     NumberAnimation {
-                        duration: 130
+                        duration: 120
                         easing.type: Easing.OutBack
                         easing.overshoot: 1.35
                     }

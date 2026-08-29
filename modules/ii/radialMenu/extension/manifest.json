@@ -1,0 +1,20 @@
+{
+  "manifest_version": 2,
+  "name": "Radial Dial Tab Sync",
+  "version": "1.0.0",
+  "description": "Real-time tab synchronization for Hyprland Radial Dial",
+  "permissions": [
+    "tabs",
+    "nativeMessaging"
+  ],
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "radial-tabs@y-astro.github.io"
+    }
+  },
+  "background": {
+    "scripts": [
+      "background.js"
+    ]
+  }
+}

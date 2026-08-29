@@ -7,9 +7,12 @@
 ## ✨ Features
 
 - 🎯 **Context-Aware Dynamic Menus**: Automatically identifies the active window underneath the cursor and adapts the dial:
+  - **Browser Context (Firefox, Zen, Chrome, etc.)**: 
+    - ⚡ **Real-Time Tab Switcher**: Sub-radial ring displaying all currently open browser tabs with full webpage titles on hover and instant `Alt+1..9` tab switching.
+    - 🆕 **Tab Operations**: New Tab, Close Tab, Duplicate Tab, and Reopen Closed Tab.
+    - 📥 **Scratchpad Manager**: Move browser windows to/from `special:special`.
   - **Kitty / Terminal Context**: Scratchpad Manager, New Window (same directory & workspace), Clear Terminal (`Ctrl + L`), Run `agy`, and Open CWD in Dolphin file manager.
-  - **Browser Context (Firefox, Brave, Chrome, Zen, etc.)**: Scratchpad Manager, New Tab, Close Tab, Duplicate Tab, and Reopen Closed Tab.
-  - **Global Desktop Context**: Scratchpad Manager (to/from `special:special`), Terminal, Wallpaper Selector, System Monitor (`btop`), Session Power/Lock Menu, File Jump (Quick-copy to Downloads, Documents, Home, Temp), and Calculator.
+  - **Global Desktop Context**: Scratchpad Manager, Terminal, Wallpaper Selector, System Monitor (`btop`), Session Power/Lock Menu, File Jump (Quick-copy to Downloads, Documents, Home, Temp), and Calculator.
 - 🚀 **Floating Rounded Wedges**: Segmented floating slices with smooth 6px rounded corners and radial gaps separating the inner hub from the outer wedges.
 - 🌊 **Organic Ripple Physics**: Active hovered slices expand by $+7\text{px}$ in radius and widen by $+6.4^\circ$, smoothly displacing adjacent slices in a continuous physics ripple wave.
 - 🪄 **Fluid Blossom Entrance Animation**: Center hub pops up with an energetic spring bounce, followed by outer slices blossoming clockwise around the clock. Automatically adapts to any slice count.
@@ -35,6 +38,16 @@ Once installed, press **`Super + Tab`** anywhere on your desktop or over any win
 
 ---
 
+## 🌐 Real-Time Browser Tab Sync (0ms Latency)
+
+For instantaneous (0ms) browser tab sync in Firefox / Zen / Librewolf:
+
+1. Open Firefox and go to: `about:debugging#/runtime/this-firefox`
+2. Click **"Load Temporary Add-on..."**
+3. Select `manifest.json` located in `modules/ii/radialMenu/extension/manifest.json`.
+
+---
+
 ## 🛠️ Manual Installation
 
 If you prefer to install manually into your `~/.config/quickshell/end4-pC/` setup:
@@ -42,6 +55,7 @@ If you prefer to install manually into your `~/.config/quickshell/end4-pC/` setu
 1. **Copy Module**:
    ```bash
    cp -r modules/ii/radialMenu ~/.config/quickshell/end4-pC/modules/ii/
+   chmod +x ~/.config/quickshell/end4-pC/modules/ii/radialMenu/*.py
    ```
 
 2. **Add Hyprland Layer Rules** (`~/.config/hypr/hyprland/rules.lua`):

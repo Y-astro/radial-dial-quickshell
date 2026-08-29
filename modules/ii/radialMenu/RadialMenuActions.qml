@@ -151,6 +151,21 @@ else:
         }
     }
 
+    // Switch to browser tab by index (1-based)
+    function switchToBrowserTab(tabIdx) {
+        if (tabIdx >= 1 && tabIdx <= 8) {
+            exec(`sleep 0.15 && wtype -M alt -k ${tabIdx} -m alt`)
+        } else if (tabIdx === 9) {
+            exec("sleep 0.15 && wtype -M alt -k 9 -m alt")
+        } else {
+            let cmd = "sleep 0.15 && wtype -M alt -k 1 -m alt"
+            for (let i = 1; i < tabIdx; i++) {
+                cmd += " && sleep 0.04 && wtype -M ctrl -k Tab -m ctrl"
+            }
+            exec(cmd)
+        }
+    }
+
     // Get slices for current state
     function getSlicesFor(tier: string, context: string, win) {
         if (tier === "scratchpad") {
@@ -163,6 +178,27 @@ else:
                 { label: "Workspace 6", icon: "counter_6", action: () => moveToWorkspace(6) },
                 { label: "Workspace 7", icon: "counter_7", action: () => moveToWorkspace(7) },
                 { label: "Workspace 8", icon: "counter_8", action: () => moveToWorkspace(8) }
+            ]
+        }
+
+        if (tier === "browsertabs") {
+            const rawTabs = GlobalStates.browserTabsList
+            if (rawTabs && Array.isArray(rawTabs) && rawTabs.length > 0) {
+                return rawTabs.map((t, i) => {
+                    const idx = t.index || (i + 1)
+                    return {
+                        label: t.title || `Tab ${idx}`,
+                        icon: idx <= 8 ? `counter_${idx}` : "tab",
+                        hasSubTier: false,
+                        action: () => switchToBrowserTab(idx)
+                    }
+                })
+            }
+            return [
+                { label: "Tab 1", icon: "counter_1", action: () => switchToBrowserTab(1) },
+                { label: "Tab 2", icon: "counter_2", action: () => switchToBrowserTab(2) },
+                { label: "Tab 3", icon: "counter_3", action: () => switchToBrowserTab(3) },
+                { label: "Tab 4", icon: "counter_4", action: () => switchToBrowserTab(4) }
             ]
         }
 
@@ -202,10 +238,19 @@ else:
             ]
         }
 
-        // Browser context (with Scratchpad Manager)
+        // Browser context (with Scratchpad Manager & Tabs ring)
         if (context === "browser") {
+            const tabCount = GlobalStates.browserTabsList ? GlobalStates.browserTabsList.length : 0
+            const tabSliceLabel = tabCount > 0 ? `Switch Tab (${tabCount})` : "Switch Tab"
             return [
                 getScratchpadSlice(win),
+                {
+                    label: tabSliceLabel,
+                    icon: "tabs",
+                    hasSubTier: true,
+                    subTierType: "browsertabs",
+                    action: null
+                },
                 {
                     label: "New Tab",
                     icon: "tab",

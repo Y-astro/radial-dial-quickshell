@@ -1,0 +1,9 @@
+{
+  "name": "radial_tabs",
+  "description": "Radial Dial Real-Time Tab Synchronizer",
+  "path": "/home/astro/.config/quickshell/end4-pC/modules/ii/radialMenu/extension/native_host.py",
+  "type": "stdio",
+  "allowed_extensions": [
+    "radial-tabs@y-astro.github.io"
+  ]
+}

@@ -28,7 +28,7 @@ Item {
     // Geometry (Pixel-aligned integers with floating gaps)
     readonly property int innerRadius: 44
     readonly property int sliceInnerRadius: 54
-    readonly property int outerRadius: currentTier === "scratchpad" ? 168 : 152
+    readonly property int outerRadius: (currentTier === "scratchpad" || currentTier === "browsertabs") ? 172 : 152
     readonly property int iconRadius: Math.round((sliceInnerRadius + outerRadius) / 2)
     readonly property int totalRadius: outerRadius + 64
 
@@ -140,6 +140,9 @@ Item {
             hoveredIndex = -1
             centerHovered = false
             activeContext = RadialMenuActions.resolveContext(GlobalStates.radialMenuContextWindow)
+            if (activeContext === "browser") {
+                GlobalStates.refreshTabs()
+            }
             restartBlossom()
         } else {
             scale = 0.85
@@ -150,6 +153,9 @@ Item {
     onCurrentTierChanged: {
         hoveredIndex = -1
         centerHovered = false
+        if (currentTier === "browsertabs" || activeContext === "browser") {
+            GlobalStates.refreshTabs()
+        }
         restartBlossom()
     }
 
@@ -157,6 +163,9 @@ Item {
         scale = 1.0
         opacity = 1.0
         forceActiveFocus()
+        if (activeContext === "browser") {
+            GlobalStates.refreshTabs()
+        }
         restartBlossom()
     }
 

@@ -38,9 +38,19 @@ echo -e "${BLUE}[*] Target Quickshell Directory:${RESET} $QS_DIR"
 echo -e "${BLUE}[*] Installing radialMenu module...${RESET}"
 mkdir -p "$QS_DIR/modules/ii/radialMenu"
 cp -r "$SCRIPT_DIR/modules/ii/radialMenu/"* "$QS_DIR/modules/ii/radialMenu/"
+chmod +x "$QS_DIR/modules/ii/radialMenu/get_browser_tabs.py" 2>/dev/null || true
+chmod +x "$QS_DIR/modules/ii/radialMenu/extension/native_host.py" 2>/dev/null || true
 echo -e "${GREEN}[✓] radialMenu module copied.${RESET}"
 
-# 3. Patch GlobalStates.qml
+# 3. Install Native Messaging Host for Firefox / Zen / Librewolf
+echo -e "${BLUE}[*] Installing Native Messaging host for browser tab sync...${RESET}"
+mkdir -p "$HOME/.mozilla/native-messaging-hosts"
+mkdir -p "$HOME/.config/mozilla/native-messaging-hosts"
+cp "$QS_DIR/modules/ii/radialMenu/extension/radial_tabs.json" "$HOME/.mozilla/native-messaging-hosts/" 2>/dev/null || true
+cp "$QS_DIR/modules/ii/radialMenu/extension/radial_tabs.json" "$HOME/.config/mozilla/native-messaging-hosts/" 2>/dev/null || true
+echo -e "${GREEN}[✓] Native Messaging host registered.${RESET}"
+
+# 4. Patch GlobalStates.qml
 GLOBAL_STATES="$QS_DIR/GlobalStates.qml"
 if [ -f "$GLOBAL_STATES" ]; then
     if ! grep -q "radialMenuOpen" "$GLOBAL_STATES"; then
@@ -55,21 +65,59 @@ patch = '''
     property real radialMenuX: 0
     property real radialMenuY: 0
     property var radialMenuScreen: null
-    property var radialMenuContextWindow: null
+    property var radialMenuContextWindow: ({})
+    property var browserTabsList: []
 
-    property var radialMenuCursorProc: Process {
-        command: ['bash', '-c', 'POS=\$(hyprctl cursorpos -j 2>/dev/null || echo \\\"{}\\\"); WIN=\$(hyprctl activewindow -j 2>/dev/null || echo \\\"null\\\"); echo \\\"{\\\\\\\"pos\\\\\\\": \$POS, \\\\\\\"win\\\\\\\": \$WIN}\\\"']
+    Process {
+        id: radialMenuCursorProc
+        command: ['bash', '-c', 'WIN=\$(hyprctl activewindow -j 2>/dev/null); [[ -z \"\$WIN\" || \"\$WIN\" == \"Invalid window\"* ]] && WIN=\"{}\"; TABS=\$(python3 $QS_DIR/modules/ii/radialMenu/get_browser_tabs.py 2>/dev/null || echo \"[]\"); echo \"{\\\\\"cursor\\\\\": \$(hyprctl cursorpos -j 2>/dev/null || echo \'{\\\\\"x\\\\\":0,\\\\\"y\\\\\":0}\'), \\\\\"window\\\\\": \$WIN, \\\\\"tabs\\\\\": \$TABS}\"']
+        running: false
         stdout: StdioCollector {
-            onDataChanged: {
+            onStreamFinished: {
                 try {
-                    const data = JSON.parse(value.trim())
-                    const pos = data.pos || {}
-                    GlobalStates.radialMenuX = pos.x ?? 0
-                    GlobalStates.radialMenuY = pos.y ?? 0
-                    GlobalStates.radialMenuContextWindow = data.win || null
+                    const data = JSON.parse(text.trim())
+                    const pos = data.cursor || { x: 0, y: 0 }
+                    let screen = null
+                    for (let i = 0; i < Quickshell.screens.length; i++) {
+                        const s = Quickshell.screens[i]
+                        if (pos.x >= s.x && pos.x < s.x + s.width &&
+                            pos.y >= s.y && pos.y < s.y + s.height) {
+                            screen = s
+                            break
+                        }
+                    }
+                    if (!screen) {
+                        const name = Hyprland.focusedMonitor?.name
+                        screen = Quickshell.screens.find(s => s.name === name) ?? Quickshell.screens[0]
+                    }
+                    root.radialMenuContextWindow = data.window || {}
+                    root.browserTabsList = data.tabs || []
+                    root.radialMenuScreen = screen
+                    root.radialMenuX = pos.x - screen.x
+                    root.radialMenuY = pos.y - screen.y
+                    root.radialMenuOpen = true
+                } catch (e) {
+                    console.warn('[RadialMenu] parse failed:', e)
+                }
+            }
+        }
+    }
+
+    Process {
+        id: refreshTabsProc
+        command: ['python3', '$QS_DIR/modules/ii/radialMenu/get_browser_tabs.py']
+        running: false
+        stdout: StdioCollector {
+            onStreamFinished: {
+                try {
+                    root.browserTabsList = JSON.parse(text.trim())
                 } catch(e) {}
             }
         }
+    }
+
+    function refreshTabs() {
+        refreshTabsProc.running = true
     }
 '''
 
@@ -83,7 +131,7 @@ if 'property bool' in content:
     fi
 fi
 
-# 4. Patch IllogicalImpulseFamily.qml / shell.qml
+# 5. Patch IllogicalImpulseFamily.qml / shell.qml
 II_FAMILY="$QS_DIR/panelFamilies/IllogicalImpulseFamily.qml"
 if [ -f "$II_FAMILY" ]; then
     if ! grep -q "RadialMenu" "$II_FAMILY"; then
@@ -97,7 +145,6 @@ if 'import qs.modules.ii.radialMenu' not in content:
     content = import_stmt + content
 
 if 'RadialMenu {}' not in content:
-    # Insert before the last closing brace
     last_brace = content.rfind('}')
     content = content[:last_brace] + '    RadialMenu {}\n' + content[last_brace:]
 
@@ -108,7 +155,7 @@ print('Instantiated RadialMenu in IllogicalImpulseFamily.qml.')
     fi
 fi
 
-# 5. Patch Hyprland layer rules
+# 6. Patch Hyprland layer rules
 HYPR_RULES="$HOME/.config/hypr/hyprland/rules.lua"
 if [ -f "$HYPR_RULES" ]; then
     if ! grep -q "quickshell:radialMenu" "$HYPR_RULES"; then
@@ -125,12 +172,11 @@ EOF
     fi
 fi
 
-# 6. Patch Hyprland keybind (Super + Tab)
+# 7. Patch Hyprland keybind (Super + Tab)
 HYPR_BINDS="$HOME/.config/hypr/hyprland/keybinds.lua"
 if [ -f "$HYPR_BINDS" ]; then
     if ! grep -q "quickshell:radialMenu" "$HYPR_BINDS"; then
         echo -e "${BLUE}[*] Binding Super + Tab to quickshell:radialMenu...${RESET}"
-        # Comment out old overview toggle on Super + Tab if present
         sed -i 's/.*SUPER + Tab.*overviewWorkspacesToggle.*/-- &/' "$HYPR_BINDS" 2>/dev/null || true
         cat << 'EOF' >> "$HYPR_BINDS"
 
@@ -141,7 +187,7 @@ EOF
     fi
 fi
 
-# 7. Reload and verify
+# 8. Reload and verify
 echo -e "${BLUE}[*] Reloading Hyprland and Quickshell...${RESET}"
 hyprctl reload >/dev/null 2>&1 || true
 killall qs quickshell 2>/dev/null || true

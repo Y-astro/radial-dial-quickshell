@@ -362,7 +362,7 @@ Item {
         collapseAnimation.restart()
     }
 
-    // Key handling (Escape to close)
+    // Key handling (Escape to close, 1..9 physical number keys to trigger slices clockwise from 12:00)
     function handleEscape(): bool {
         if (activeSubTier !== "") {
             updateSubTier("", -1)
@@ -372,10 +372,62 @@ Item {
         return true
     }
 
+    function handleNumberKey(num: int): bool {
+        const targetIdx = num - 1 // 0-indexed (Key 1 -> Slice 0, Key 2 -> Slice 1, ...)
+
+        // Case A: Localized Sub-Dial is currently open
+        if (root.activeSubTier !== "" && root.subSliceCount > 0 && root.parentSliceIndex >= 0) {
+            if (targetIdx >= 0 && targetIdx < root.subSliceCount) {
+                const subSlice = root.subSlices[targetIdx]
+                if (subSlice && typeof subSlice.action === "function") {
+                    root.outerHoveredIndex = targetIdx
+                    root.closeAnimated(subSlice.action)
+                    return true
+                }
+            }
+            return false
+        }
+
+        // Case B: Main Wheel is active
+        if (targetIdx >= 0 && targetIdx < root.sliceCount) {
+            const slice = root.currentSlices[targetIdx]
+            if (!slice) return false
+
+            if (slice.hasSubTier) {
+                // Open / toggle localized petal fan for this slice
+                root.hoveredIndex = targetIdx
+                root.updateSubTier(slice.subTierType, targetIdx)
+                return true
+            } else if (typeof slice.action === "function") {
+                // Execute direct slice action
+                root.hoveredIndex = targetIdx
+                root.closeAnimated(slice.action)
+                return true
+            }
+        }
+
+        return false
+    }
+
     Keys.onPressed: (event) => {
         if (event.key === Qt.Key_Escape) {
             handleEscape()
             event.accepted = true
+            return
+        }
+
+        let num = -1
+        if (event.key >= Qt.Key_1 && event.key <= Qt.Key_9) {
+            num = event.key - Qt.Key_1 + 1
+        } else if (event.key >= Qt.Key_Numpad1 && event.key <= Qt.Key_Numpad9) {
+            num = event.key - Qt.Key_Numpad1 + 1
+        }
+
+        if (num >= 1 && num <= 9) {
+            if (handleNumberKey(num)) {
+                event.accepted = true
+                return
+            }
         }
     }
 

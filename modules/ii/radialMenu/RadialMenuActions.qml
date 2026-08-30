@@ -236,14 +236,14 @@ else:
                     action: () => openTerminalNewWindow(win?.pid)
                 },
                 {
-                    label: "Clear Terminal",
-                    icon: "mop",
-                    action: () => exec("sleep 0.05 && wtype -M ctrl -k l -m ctrl")
-                },
-                {
                     label: "Run agy",
                     icon: "robot_2",
                     action: () => exec("sleep 0.05 && wtype 'agy --dangerously-skip-permissions' -k Return")
+                },
+                {
+                    label: "Clear Terminal",
+                    icon: "mop",
+                    action: () => exec("sleep 0.05 && wtype -M ctrl -k l -m ctrl")
                 },
                 {
                     label: "Open CWD in Dolphin",

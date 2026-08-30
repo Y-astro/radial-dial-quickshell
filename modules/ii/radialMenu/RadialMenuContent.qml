@@ -10,7 +10,7 @@ import qs.modules.common.functions
 import qs.modules.ii.radialMenu
 
 // ─────────────────────────────────────────────────────────────────────────────
-// RadialMenuContent — Organic Ripple Floating Wedges Radial Menu
+// RadialMenuContent — Localized Symmetrical Petal Fan Radial Menu
 // ─────────────────────────────────────────────────────────────────────────────
 Item {
     id: root
@@ -20,25 +20,128 @@ Item {
 
     focus: true
 
-    // State
-    property string currentTier: "main"
+    // Context & Main Slices
     property string activeContext: RadialMenuActions.resolveContext(GlobalStates.radialMenuContextWindow)
-    property var currentSlices: RadialMenuActions.getSlicesFor(currentTier, activeContext, GlobalStates.radialMenuContextWindow)
+    property var currentSlices: RadialMenuActions.getSlicesFor("main", activeContext, GlobalStates.radialMenuContextWindow)
 
-    // Geometry (Pixel-aligned integers with floating gaps)
-    readonly property int innerRadius: 44
-    readonly property int sliceInnerRadius: 54
-    readonly property int outerRadius: (currentTier === "scratchpad" || currentTier === "browsertabs") ? 172 : 152
-    readonly property int iconRadius: Math.round((sliceInnerRadius + outerRadius) / 2)
-    readonly property int totalRadius: outerRadius + 64
+    // Localized Concentric Outer Sub-Ring State (Opened on Click)
+    property string activeSubTier: ""
+    property int parentSliceIndex: -1
+    property var subSlices: []
+    readonly property int subSliceCount: subSlices ? subSlices.length : 0
+
+    // Geometry (Pixel-aligned concentric rings)
+    readonly property int innerRadius: 44       // Center Hub radius
+    readonly property int sliceInnerRadius: 54  // Main Ring inner radius
+    readonly property int outerRadius: 148      // Main Ring outer radius
+    readonly property int iconRadius: Math.round((sliceInnerRadius + outerRadius) / 2) // 101px
+
+    readonly property int subInnerRadius: 156   // Concentric Outer Sub-Ring inner radius (8px gap)
+    readonly property int subOuterRadius: 216   // Concentric Outer Sub-Ring outer radius (60px thick)
+    readonly property int subIconRadius: Math.round((subInnerRadius + subOuterRadius) / 2) // 186px
+
+    readonly property int totalRadius: subOuterRadius + 40 // 256px bounds
 
     readonly property int sliceCount: currentSlices ? currentSlices.length : 0
     readonly property real sliceAngle: sliceCount > 0 ? (360.0 / sliceCount) : 360.0
 
-    // Hover state: -1 = none/center, 0..N = slice index
+    // Localized Fan Geometry (Centered dynamically over the parent slice)
+    readonly property real parentMidAngle: parentSliceIndex >= 0 ? ((parentSliceIndex + 0.5) * sliceAngle - 90.0) : 0.0
+    readonly property real subSliceWidth: subSliceCount > 0 ? Math.min(36.0, Math.max(22.0, 110.0 / subSliceCount)) : 28.0
+    readonly property real subTotalSpan: subSliceCount * subSliceWidth
+    readonly property real subStartAngle: parentMidAngle - subTotalSpan / 2.0
+
+    // Hover state: Main Ring
     property int hoveredIndex: -1
     property bool centerHovered: false
     property real hoverFactor: 0.0
+
+    // Hover state: Localized Concentric Sub-Ring
+    property int outerHoveredIndex: -1
+    property real outerHoverFactor: 0.0
+    property real subRevealProgress: 0.0
+
+    // Dynamic Active Hover Label for Center Hub
+    readonly property string activeHoverLabel: {
+        if (outerHoveredIndex >= 0 && subSlices && subSlices[outerHoveredIndex]) {
+            return subSlices[outerHoveredIndex].label || ""
+        }
+        if (hoveredIndex >= 0 && currentSlices && currentSlices[hoveredIndex]) {
+            return currentSlices[hoveredIndex].label || ""
+        }
+        return ""
+    }
+
+    // Helper: Normalize degrees into [0, 360)
+    function normalizeDeg(deg: real): real {
+        let d = deg % 360.0
+        if (d < 0.0) d += 360.0
+        return d
+    }
+
+    // Direct Sub-Tier Activation Dispatcher (Triggered on Click)
+    function updateSubTier(tierName: string, parentIdx: int) {
+        if (activeSubTier === tierName && parentSliceIndex === parentIdx && tierName !== "") {
+            // Toggle close if clicking same parent slice
+            updateSubTier("", -1)
+            return
+        }
+
+        if (tierName !== "" && parentIdx >= 0) {
+            subCollapseAnim.stop()
+            activeSubTier = tierName
+            parentSliceIndex = parentIdx
+            const items = RadialMenuActions.getSlicesFor(tierName, activeContext, GlobalStates.radialMenuContextWindow)
+            subSlices = (items && items.length > 0) ? items : []
+            outerHoveredIndex = -1
+            subRevealAnim.to = Math.max(1, subSlices.length)
+            subRevealAnim.restart()
+        } else {
+            subRevealAnim.stop()
+            outerHoveredIndex = -1
+            if (subRevealProgress > 0.0) {
+                subCollapseAnim.restart()
+            } else {
+                activeSubTier = ""
+                parentSliceIndex = -1
+                subSlices = []
+            }
+        }
+    }
+
+    // Sub-Dial Blossom Opening Animation (Inside to Outside)
+    NumberAnimation {
+        id: subRevealAnim
+        target: root
+        property: "subRevealProgress"
+        from: 0.0
+        to: Math.max(1, root.subSliceCount)
+        duration: Math.max(180, root.subSliceCount * 40)
+        easing.type: Easing.OutCubic
+    }
+
+    // Sub-Dial Collapse Closing Animation (Outside to Inside)
+    SequentialAnimation {
+        id: subCollapseAnim
+        running: false
+
+        NumberAnimation {
+            target: root
+            property: "subRevealProgress"
+            to: 0.0
+            duration: Math.max(130, root.subSliceCount * 26)
+            easing.type: Easing.InCubic
+        }
+
+        ScriptAction {
+            script: {
+                root.activeSubTier = ""
+                root.parentSliceIndex = -1
+                root.subSlices = []
+                root.outerHoveredIndex = -1
+            }
+        }
+    }
 
     onHoveredIndexChanged: {
         if (hoveredIndex >= 0) {
@@ -67,6 +170,36 @@ Item {
         property: "hoverFactor"
         to: 0.0
         duration: 120
+        easing.type: Easing.OutQuad
+    }
+
+    onOuterHoveredIndexChanged: {
+        if (outerHoveredIndex >= 0) {
+            outerHoverSpringAnim.stop()
+            outerHoverFactor = 0.0
+            outerHoverSpringAnim.restart()
+        } else {
+            outerHoverFadeAnim.restart()
+        }
+    }
+
+    NumberAnimation {
+        id: outerHoverSpringAnim
+        target: root
+        property: "outerHoverFactor"
+        from: 0.0
+        to: 1.0
+        duration: 140
+        easing.type: Easing.OutBack
+        easing.overshoot: 1.2
+    }
+
+    NumberAnimation {
+        id: outerHoverFadeAnim
+        target: root
+        property: "outerHoverFactor"
+        to: 0.0
+        duration: 100
         easing.type: Easing.OutQuad
     }
 
@@ -128,15 +261,15 @@ Item {
         hubScale = 0.0
         revealProgress = 0.0
         hoverFactor = 0.0
+        updateSubTier("", -1)
         blossomAnimation.restart()
     }
 
-    // Trigger animation when opened or tier changed
+    // Trigger animation when opened
     onVisibleChanged: {
         if (visible) {
             scale = 1.0
             opacity = 1.0
-            currentTier = "main"
             hoveredIndex = -1
             centerHovered = false
             activeContext = RadialMenuActions.resolveContext(GlobalStates.radialMenuContextWindow)
@@ -147,16 +280,8 @@ Item {
         } else {
             scale = 0.85
             opacity = 0.0
+            updateSubTier("", -1)
         }
-    }
-
-    onCurrentTierChanged: {
-        hoveredIndex = -1
-        centerHovered = false
-        if (currentTier === "browsertabs" || activeContext === "browser") {
-            GlobalStates.refreshTabs()
-        }
-        restartBlossom()
     }
 
     Component.onCompleted: {
@@ -176,8 +301,15 @@ Item {
         id: collapseAnimation
         running: false
 
-        // Step 1: Outer slices collapse inward (N down to 0)
+        // Step 1: Concentric rings collapse inward (N down to 0)
         ParallelAnimation {
+            NumberAnimation {
+                target: root
+                property: "subRevealProgress"
+                to: 0.0
+                duration: 100
+                easing.type: Easing.InQuad
+            }
             NumberAnimation {
                 target: root
                 property: "revealProgress"
@@ -201,7 +333,7 @@ Item {
             }
         }
 
-        // Step 2: Center Close/Back hub pops down to 0
+        // Step 2: Center Close hub pops down to 0
         NumberAnimation {
             target: root
             property: "hubScale"
@@ -230,12 +362,10 @@ Item {
         collapseAnimation.restart()
     }
 
-    // Key handling (Escape to go back or close)
+    // Key handling (Escape to close)
     function handleEscape(): bool {
-        if (currentTier !== "main") {
-            currentTier = "main"
-            hoveredIndex = -1
-            centerHovered = false
+        if (activeSubTier !== "") {
+            updateSubTier("", -1)
             return true
         }
         closeAnimated()
@@ -249,7 +379,7 @@ Item {
         }
     }
 
-    // ── Canvas: GPU-Accelerated Floating Rounded Wedges with Ripple Displacement
+    // ── Canvas: GPU-Accelerated Concentric Floating Wedges ────────────────────
     Canvas {
         id: pieCanvas
         anchors.fill: parent
@@ -257,19 +387,29 @@ Item {
 
         property int _hov: root.hoveredIndex
         property real _hovFactor: root.hoverFactor
-        property string _tier: root.currentTier
         property real _rev: root.revealProgress
         property color _primary: Appearance.colors.colPrimary
 
+        property string _subTier: root.activeSubTier
+        property real _subRev: root.subRevealProgress
+        property int _outerHov: root.outerHoveredIndex
+        property real _outerHovFactor: root.outerHoverFactor
+        property int _parentIdx: root.parentSliceIndex
+
         on_HovChanged: requestPaint()
         on_HovFactorChanged: requestPaint()
-        on_TierChanged: requestPaint()
         on_RevChanged: requestPaint()
         on_PrimaryChanged: requestPaint()
 
-        readonly property real gapDeg: Math.max(3.2, 22.0 / Math.max(1, root.sliceCount))
+        on_SubTierChanged: requestPaint()
+        on_SubRevChanged: requestPaint()
+        on_OuterHovChanged: requestPaint()
+        on_OuterHovFactorChanged: requestPaint()
+        on_ParentIdxChanged: requestPaint()
 
-        // Ripple displacement calculator
+        readonly property real gapPx: 8.5
+
+        // Ripple displacement calculator for main ring
         function getSliceDisplacement(i, n, h, factor) {
             if (h < 0 || factor <= 0.0 || n <= 0) {
                 return { startShift: 0, endShift: 0, rShift: 0 }
@@ -300,60 +440,93 @@ Item {
             }
         }
 
+        // Draw floating wedge with uniform parallel gap (constant Euclidean distance at all radii)
         function drawFloatingWedge(ctx, cx, cy, r0, r1, th0, th1, cr) {
-            const dth0 = cr / r0
-            const dth1 = cr / r1
+            const hg = gapPx / 2.0
+            const dth0 = Math.asin(Math.min(0.92, hg / r0))
+            const dth1 = Math.asin(Math.min(0.92, hg / r1))
 
-            if ((th1 - th0) <= 2.2 * dth0 || (r1 - r0) <= 2.2 * cr) {
+            const th0_in = th0 + dth0
+            const th1_in = th1 - dth0
+            const th0_out = th0 + dth1
+            const th1_out = th1 - dth1
+
+            if ((th1_in - th0_in) <= 0.02 || (r1 - r0) <= 2.0) {
                 ctx.beginPath()
-                ctx.arc(cx, cy, r1, th0, th1, false)
-                ctx.arc(cx, cy, r0, th1, th0, true)
+                ctx.arc(cx, cy, r1, th0_out, th1_out, false)
+                ctx.arc(cx, cy, r0, th1_in, th0_in, true)
                 ctx.closePath()
                 return
             }
 
+            const effectiveCr = Math.min(cr, (r1 - r0) / 2.2, Math.max(1.0, (th1_in - th0_in) * r0 / 2.5))
+            const cth0 = effectiveCr / r0
+            const cth1 = effectiveCr / r1
+
+            // Right straight edge endpoints
+            const p_in_r_x = cx + r0 * Math.cos(th1_in)
+            const p_in_r_y = cy + r0 * Math.sin(th1_in)
+            const p_out_r_x = cx + r1 * Math.cos(th1_out)
+            const p_out_r_y = cy + r1 * Math.sin(th1_out)
+
+            const dx_r = p_out_r_x - p_in_r_x
+            const dy_r = p_out_r_y - p_in_r_y
+            const len_r = Math.hypot(dx_r, dy_r) || 1.0
+            const vr_x = dx_r / len_r
+            const vr_y = dy_r / len_r
+
+            // Left straight edge endpoints
+            const p_in_l_x = cx + r0 * Math.cos(th0_in)
+            const p_in_l_y = cy + r0 * Math.sin(th0_in)
+            const p_out_l_x = cx + r1 * Math.cos(th0_out)
+            const p_out_l_y = cy + r1 * Math.sin(th0_out)
+
+            const dx_l = p_out_l_x - p_in_l_x
+            const dy_l = p_out_l_y - p_in_l_y
+            const len_l = Math.hypot(dx_l, dy_l) || 1.0
+            const vl_x = dx_l / len_l
+            const vl_y = dy_l / len_l
+
             ctx.beginPath()
 
-            // 1. Inner concentric arc
-            ctx.arc(cx, cy, r0, th0 + dth0, th1 - dth0, false)
+            // 1. Inner arc
+            ctx.arc(cx, cy, r0, th0_in + cth0, th1_in - cth0, false)
 
-            // 2. Corner 1: Inner arc -> Radial End edge
+            // 2. Corner 1: Inner arc -> Right edge
             ctx.quadraticCurveTo(
-                cx + r0 * Math.cos(th1), cy + r0 * Math.sin(th1),
-                cx + (r0 + cr) * Math.cos(th1), cy + (r0 + cr) * Math.sin(th1)
+                p_in_r_x, p_in_r_y,
+                p_in_r_x + effectiveCr * vr_x, p_in_r_y + effectiveCr * vr_y
             )
 
-            // 3. Radial End edge
+            // 3. Right edge straight line
             ctx.lineTo(
-                cx + (r1 - cr) * Math.cos(th1),
-                cy + (r1 - cr) * Math.sin(th1)
+                p_out_r_x - effectiveCr * vr_x, p_out_r_y - effectiveCr * vr_y
             )
 
-            // 4. Corner 2: Radial End edge -> Outer arc
+            // 4. Corner 2: Right edge -> Outer arc
             ctx.quadraticCurveTo(
-                cx + r1 * Math.cos(th1), cy + r1 * Math.sin(th1),
-                cx + r1 * Math.cos(th1 - dth1), cy + r1 * Math.sin(th1 - dth1)
+                p_out_r_x, p_out_r_y,
+                cx + r1 * Math.cos(th1_out - cth1), cy + r1 * Math.sin(th1_out - cth1)
             )
 
-            // 5. Outer concentric arc
-            ctx.arc(cx, cy, r1, th1 - dth1, th0 + dth1, true)
+            // 5. Outer arc
+            ctx.arc(cx, cy, r1, th1_out - cth1, th0_out + cth1, true)
 
-            // 6. Corner 3: Outer arc -> Radial Start edge
+            // 6. Corner 3: Outer arc -> Left edge
             ctx.quadraticCurveTo(
-                cx + r1 * Math.cos(th0), cy + r1 * Math.sin(th0),
-                cx + (r1 - cr) * Math.cos(th0), cy + (r1 - cr) * Math.sin(th0)
+                p_out_l_x, p_out_l_y,
+                p_out_l_x - effectiveCr * vl_x, p_out_l_y - effectiveCr * vl_y
             )
 
-            // 7. Radial Start edge
+            // 7. Left edge straight line
             ctx.lineTo(
-                cx + (r0 + cr) * Math.cos(th0),
-                cy + (r0 + cr) * Math.sin(th0)
+                p_in_l_x + effectiveCr * vl_x, p_in_l_y + effectiveCr * vl_y
             )
 
-            // 8. Corner 4: Radial Start edge -> Inner arc
+            // 8. Corner 4: Left edge -> Inner arc
             ctx.quadraticCurveTo(
-                cx + r0 * Math.cos(th0), cy + r0 * Math.sin(th0),
-                cx + r0 * Math.cos(th0 + dth0), cy + r0 * Math.sin(th0 + dth0)
+                p_in_l_x, p_in_l_y,
+                cx + r0 * Math.cos(th0_in + cth0), cy + r0 * Math.sin(th0_in + cth0)
             )
 
             ctx.closePath()
@@ -373,7 +546,7 @@ Item {
 
             const cr = 6 // Smooth corner radius for rounded wedges
 
-            // ── Individual Floating Rounded Wedges with Ripple Displacement ──
+            // ── 1. Main Inner Ring Floating Wedges ────────────────────────────
             for (let i = 0; i < n; i++) {
                 const p = Math.min(Math.max(root.revealProgress - i, 0.0), 1.0)
                 if (p <= 0.0) continue
@@ -384,8 +557,8 @@ Item {
                 const baseOuter = root.sliceInnerRadius + (root.outerRadius - root.sliceInnerRadius) * ease
                 const currentOuter = baseOuter + disp.rShift
 
-                const baseStartDeg = i * root.sliceAngle - 90 + gapDeg / 2
-                const baseEndDeg = (i + 1) * root.sliceAngle - 90 - gapDeg / 2
+                const baseStartDeg = i * root.sliceAngle - 90
+                const baseEndDeg = (i + 1) * root.sliceAngle - 90
 
                 const startDeg = baseStartDeg + disp.startShift
                 const endDeg = baseEndDeg + disp.endShift
@@ -394,11 +567,12 @@ Item {
                 const endRad = endDeg * Math.PI / 180
 
                 const isHov = (i === root.hoveredIndex)
+                const isParentOfSub = (i === root.parentSliceIndex && root.activeSubTier !== "")
 
-                // Build smooth rounded floating wedge path
+                // Build uniform parallel gap floating wedge
                 drawFloatingWedge(ctx, cx, cy, root.sliceInnerRadius, currentOuter, startRad, endRad, cr)
 
-                if (isHov) {
+                if (isHov || isParentOfSub) {
                     // Soft radial gradient highlight pointing toward center
                     const grad = ctx.createRadialGradient(
                         cx, cy, root.sliceInnerRadius - 10,
@@ -431,10 +605,68 @@ Item {
                     ctx.stroke()
                 }
             }
+
+            // ── 2. Localized Symmetrical Sub-Arc Over Parent Segment ──────────
+            const m = root.subSliceCount
+            if (root.subRevealProgress > 0.0 && m > 0 && root.parentSliceIndex >= 0) {
+                const subCr = 5
+                const startAngleBase = root.subStartAngle
+                const sliceW = root.subSliceWidth
+
+                for (let j = 0; j < m; j++) {
+                    const p = Math.min(Math.max(root.subRevealProgress - j, 0.0), 1.0)
+                    if (p <= 0.0) continue
+
+                    const subEase = (p >= 1.0) ? 1.0 : (1.0 - Math.pow(1.0 - p, 3))
+                    const isOuterHov = (j === root.outerHoveredIndex)
+                    const rLift = isOuterHov ? 5.0 * root.outerHoverFactor : 0.0
+
+                    const currentSubOuter = root.subInnerRadius + (root.subOuterRadius - root.subInnerRadius) * subEase + rLift
+
+                    const startDeg = startAngleBase + j * sliceW
+                    const endDeg = startDeg + sliceW
+
+                    const startRad = startDeg * Math.PI / 180
+                    const endRad = endDeg * Math.PI / 180
+
+                    drawFloatingWedge(ctx, cx, cy, root.subInnerRadius, currentSubOuter, startRad, endRad, subCr)
+
+                    if (isOuterHov) {
+                        const grad = ctx.createRadialGradient(
+                            cx, cy, root.subInnerRadius - 5,
+                            cx, cy, currentSubOuter + 10
+                        )
+                        grad.addColorStop(0.0, Qt.lighter(Appearance.colors.colPrimary, 1.30))
+                        grad.addColorStop(0.40, Appearance.colors.colPrimary)
+                        grad.addColorStop(1.0, Qt.darker(Appearance.colors.colPrimary, 1.10))
+
+                        ctx.fillStyle = grad
+                        ctx.fill()
+                        ctx.strokeStyle = Qt.lighter(Appearance.colors.colPrimary, 1.30)
+                        ctx.lineWidth = 1.8
+                        ctx.stroke()
+                    } else {
+                        const grad = ctx.createRadialGradient(
+                            cx, cy, root.subInnerRadius,
+                            cx, cy, currentSubOuter
+                        )
+                        grad.addColorStop(0.0, Qt.rgba(0.12, 0.12, 0.16, 0.60))
+                        grad.addColorStop(1.0, Qt.rgba(0.06, 0.06, 0.09, 0.48))
+
+                        ctx.fillStyle = grad
+                        ctx.fill()
+                        ctx.fillStyle = Qt.rgba(1.0, 1.0, 1.0, 0.06)
+                        ctx.fill()
+                        ctx.strokeStyle = Qt.rgba(1.0, 1.0, 1.0, 0.24)
+                        ctx.lineWidth = 1.0
+                        ctx.stroke()
+                    }
+                }
+            }
         }
     }
 
-    // ── High-Efficiency Mouse Tracking Area ───────────────────────────────────
+    // ── High-Efficiency Concentric Mouse Tracking Area ────────────────────────
     MouseArea {
         id: dialMouseArea
         anchors.fill: parent
@@ -444,35 +676,60 @@ Item {
         onPositionChanged: (mouse) => {
             const dx = mouse.x - root.cx
             const dy = mouse.y - root.cy
-            const distSq = dx * dx + dy * dy
+            const dist = Math.sqrt(dx * dx + dy * dy)
 
-            const innerSq = root.innerRadius * root.innerRadius
-            const outerSq = (root.outerRadius + 14) * (root.outerRadius + 14)
-
-            if (distSq < innerSq) {
+            // Zone 1: Center Hub (< 48px)
+            if (dist < root.sliceInnerRadius * 0.90) {
                 if (root.hoveredIndex !== -1) root.hoveredIndex = -1
+                if (root.outerHoveredIndex !== -1) root.outerHoveredIndex = -1
                 if (!root.centerHovered) root.centerHovered = true
                 return
             }
 
             if (root.centerHovered) root.centerHovered = false
 
-            if (distSq > outerSq || distSq < root.sliceInnerRadius * root.sliceInnerRadius * 0.8) {
-                if (distSq > outerSq && root.hoveredIndex !== -1) root.hoveredIndex = -1
+            // Zone 2: Outside entire dial (> 224px)
+            if (dist > root.subOuterRadius + 14) {
+                if (root.hoveredIndex !== -1) root.hoveredIndex = -1
+                if (root.outerHoveredIndex !== -1) root.outerHoveredIndex = -1
                 return
             }
 
-            let angle = Math.atan2(dy, dx) * 180.0 / Math.PI + 90.0
-            if (angle < 0) angle += 360.0
+            const rawAngle = Math.atan2(dy, dx) * 180.0 / Math.PI
+            const canvasAngle = root.normalizeDeg(rawAngle)
+            const clockAngle = root.normalizeDeg(rawAngle + 90.0)
 
-            const newIdx = Math.floor(angle / root.sliceAngle) % root.sliceCount
-            if (newIdx !== root.hoveredIndex) {
-                root.hoveredIndex = newIdx
+            // Zone 3: Localized Outer Sub-Ring (dist >= 152px)
+            if (dist >= root.subInnerRadius - 6) {
+                if (root.activeSubTier !== "" && root.subSliceCount > 0 && root.parentSliceIndex >= 0) {
+                    const normStart = root.normalizeDeg(root.subStartAngle)
+                    const relAngle = root.normalizeDeg(canvasAngle - normStart)
+
+                    if (relAngle <= root.subTotalSpan) {
+                        const newOuterIdx = Math.min(root.subSliceCount - 1, Math.floor(relAngle / root.subSliceWidth))
+                        if (newOuterIdx !== root.outerHoveredIndex) {
+                            root.outerHoveredIndex = newOuterIdx
+                        }
+                        return
+                    }
+                }
+                root.outerHoveredIndex = -1
+                return
+            }
+
+            // Zone 4: Main Inner Ring (48px <= dist < 152px)
+            if (dist < root.subInnerRadius - 6) {
+                root.outerHoveredIndex = -1
+                const newIdx = Math.floor(clockAngle / root.sliceAngle) % root.sliceCount
+                if (newIdx !== root.hoveredIndex) {
+                    root.hoveredIndex = newIdx
+                }
             }
         }
 
         onExited: {
             if (root.hoveredIndex !== -1) root.hoveredIndex = -1
+            if (root.outerHoveredIndex !== -1) root.outerHoveredIndex = -1
             if (root.centerHovered) root.centerHovered = false
         }
 
@@ -484,26 +741,46 @@ Item {
 
             const dx = mouse.x - root.cx
             const dy = mouse.y - root.cy
-            const distSq = dx * dx + dy * dy
+            const dist = Math.sqrt(dx * dx + dy * dy)
 
-            // Click in center hub -> Go back or close
-            if (distSq <= root.sliceInnerRadius * root.sliceInnerRadius) {
-                root.handleEscape()
-                return
-            }
-
-            // Click outside dial radius -> close with outside-to-inside animation
-            if (distSq > (root.outerRadius + 14) * (root.outerRadius + 14)) {
+            // Click Center Hub -> Close
+            if (dist <= root.sliceInnerRadius * 0.90) {
                 root.closeAnimated()
                 return
             }
 
-            // Click on active slice
+            // Click outside dial bounds -> Close
+            if (dist > root.subOuterRadius + 14) {
+                root.closeAnimated()
+                return
+            }
+
+            const rawAngle = Math.atan2(dy, dx) * 180.0 / Math.PI
+            const canvasAngle = root.normalizeDeg(rawAngle)
+            const clockAngle = root.normalizeDeg(rawAngle + 90.0)
+
+            // Click in Localized Outer Sub-Ring
+            if (dist >= root.subInnerRadius - 6 && root.activeSubTier !== "" && root.subSliceCount > 0 && root.parentSliceIndex >= 0) {
+                const normStart = root.normalizeDeg(root.subStartAngle)
+                const relAngle = root.normalizeDeg(canvasAngle - normStart)
+
+                if (relAngle <= root.subTotalSpan) {
+                    const clickIdx = Math.min(root.subSliceCount - 1, Math.floor(relAngle / root.subSliceWidth))
+                    const subSlice = root.subSlices[clickIdx]
+                    if (subSlice && typeof subSlice.action === "function") {
+                        root.closeAnimated(subSlice.action)
+                    }
+                }
+                return
+            }
+
+            // Click in Main Inner Ring -> Open Sub-Tier or Execute Action
             if (root.hoveredIndex >= 0 && root.hoveredIndex < root.sliceCount) {
                 const slice = root.currentSlices[root.hoveredIndex]
                 if (!slice) return
                 if (slice.hasSubTier) {
-                    root.currentTier = slice.subTierType
+                    // Click opens/toggles the localized outer petal fan!
+                    root.updateSubTier(slice.subTierType, root.hoveredIndex)
                 } else if (typeof slice.action === "function") {
                     root.closeAnimated(slice.action)
                 }
@@ -511,7 +788,7 @@ Item {
         }
     }
 
-    // ── Slice Icons & Badges Overlay (Synchronized Ripple Physics) ────────────
+    // ── 1. Main Ring Icons Overlay ───────────────────────────────────────────
     Repeater {
         model: root.sliceCount
 
@@ -521,8 +798,8 @@ Item {
 
             readonly property var disp: pieCanvas.getSliceDisplacement(sliceOverlay.index, root.sliceCount, root.hoveredIndex, root.hoverFactor)
 
-            readonly property real baseStartDeg: index * root.sliceAngle - 90 + pieCanvas.gapDeg / 2
-            readonly property real baseEndDeg: (index + 1) * root.sliceAngle - 90 - pieCanvas.gapDeg / 2
+            readonly property real baseStartDeg: index * root.sliceAngle - 90
+            readonly property real baseEndDeg: (index + 1) * root.sliceAngle - 90
 
             readonly property real curStartDeg: baseStartDeg + disp.startShift
             readonly property real curEndDeg: baseEndDeg + disp.endShift
@@ -532,10 +809,8 @@ Item {
             readonly property real rawIconX: root.cx + currentIconRadius * Math.cos(midRad)
             readonly property real rawIconY: root.cy + currentIconRadius * Math.sin(midRad)
 
-            readonly property real rawLabelX: root.cx + (root.outerRadius + disp.rShift + 22) * Math.cos(midRad)
-            readonly property real rawLabelY: root.cy + (root.outerRadius + disp.rShift + 22) * Math.sin(midRad)
-
             readonly property bool isHovered: sliceOverlay.index === root.hoveredIndex
+            readonly property bool isParentOfSub: (sliceOverlay.index === root.parentSliceIndex && root.activeSubTier !== "")
             readonly property var sliceData: root.currentSlices && root.currentSlices[sliceOverlay.index] ? root.currentSlices[sliceOverlay.index] : null
 
             // Staggered reveal progress
@@ -554,13 +829,13 @@ Item {
             Behavior on x { NumberAnimation { duration: 110; easing.type: Easing.OutQuad } }
             Behavior on y { NumberAnimation { duration: 110; easing.type: Easing.OutQuad } }
 
-            // ── Material Symbol Icon (Pixel-Crisp Native Vector Glyph Sizing) ──
+            // Material Symbol Icon
             MaterialSymbol {
                 anchors.centerIn: parent
                 text: sliceOverlay.sliceData ? sliceOverlay.sliceData.icon : ""
-                iconSize: sliceOverlay.isHovered ? 30 : 25
-                fill: sliceOverlay.isHovered ? 1 : 0
-                color: sliceOverlay.isHovered
+                iconSize: (sliceOverlay.isHovered || sliceOverlay.isParentOfSub) ? 30 : 25
+                fill: (sliceOverlay.isHovered || sliceOverlay.isParentOfSub) ? 1 : 0
+                color: (sliceOverlay.isHovered || sliceOverlay.isParentOfSub)
                     ? Appearance.colors.colOnPrimary
                     : Qt.rgba(1.0, 1.0, 1.0, 0.95)
 
@@ -574,56 +849,120 @@ Item {
                 Behavior on color { ColorAnimation { duration: 90 } }
                 Behavior on fill { NumberAnimation { duration: 90 } }
             }
+        }
+    }
 
-            // ── Hover Tooltip / Label Pill ──
-            Rectangle {
-                visible: sliceOverlay.isHovered && !!sliceOverlay.sliceData?.label && sliceOverlay.sliceProgress >= 0.95
-                opacity: visible ? 1.0 : 0.0
-                radius: Appearance.rounding.small
-                color: Qt.rgba(0.08, 0.08, 0.10, 0.90)
-                border.color: Qt.rgba(1.0, 1.0, 1.0, 0.20)
-                border.width: 1
+    // ── 2. Localized Symmetrical Sub-Arc Icons Overlay ────────────────────────
+    Repeater {
+        model: root.subSliceCount
 
-                width: Math.round(labelText.implicitWidth + 16)
-                height: Math.round(labelText.implicitHeight + 8)
+        delegate: Item {
+            id: outerSliceOverlay
+            required property int index
 
-                // Position badge aligned to integer pixel boundaries
-                x: Math.round((sliceOverlay.rawLabelX - sliceOverlay.x) - width / 2)
-                y: Math.round((sliceOverlay.rawLabelY - sliceOverlay.y) - height / 2)
+            readonly property real itemStartDeg: root.subStartAngle + outerSliceOverlay.index * root.subSliceWidth
+            readonly property real itemEndDeg: itemStartDeg + root.subSliceWidth
+            readonly property real midRad: ((itemStartDeg + itemEndDeg) / 2) * Math.PI / 180
 
-                StyledText {
-                    id: labelText
-                    anchors.centerIn: parent
-                    text: sliceOverlay.sliceData?.label ?? ""
-                    font.pixelSize: Appearance.font.pixelSize.small
-                    color: Qt.rgba(0.96, 0.96, 0.98, 1.0)
+            readonly property bool isOuterHovered: outerSliceOverlay.index === root.outerHoveredIndex
+            readonly property real rLift: isOuterHovered ? 5.0 * root.outerHoverFactor : 0.0
+            readonly property real curIconRadius: root.subIconRadius + rLift / 2
+
+            readonly property real rawIconX: root.cx + curIconRadius * Math.cos(midRad)
+            readonly property real rawIconY: root.cy + curIconRadius * Math.sin(midRad)
+
+            readonly property var sliceData: root.subSlices && root.subSlices[outerSliceOverlay.index] ? root.subSlices[outerSliceOverlay.index] : null
+
+            // Staggered reveal progress
+            readonly property real sliceProgress: Math.min(Math.max(root.subRevealProgress - outerSliceOverlay.index, 0.0), 1.0)
+            readonly property real sliceScale: (sliceProgress >= 1.0) ? 1.0 : (1.0 - Math.pow(1.0 - sliceProgress, 3))
+
+            visible: (root.activeSubTier !== "" || subCollapseAnim.running) && sliceProgress > 0.0
+            opacity: sliceProgress
+            scale: sliceScale
+
+            width: 40
+            height: 40
+            x: Math.round(rawIconX - width / 2)
+            y: Math.round(rawIconY - height / 2)
+
+            Behavior on x { NumberAnimation { duration: 110; easing.type: Easing.OutQuad } }
+            Behavior on y { NumberAnimation { duration: 110; easing.type: Easing.OutQuad } }
+
+            // Material Symbol Icon
+            MaterialSymbol {
+                anchors.centerIn: parent
+                text: outerSliceOverlay.sliceData ? outerSliceOverlay.sliceData.icon : ""
+                iconSize: outerSliceOverlay.isOuterHovered ? 26 : 22
+                fill: outerSliceOverlay.isOuterHovered ? 1 : 0
+                color: outerSliceOverlay.isOuterHovered
+                    ? Appearance.colors.colOnPrimary
+                    : Qt.rgba(1.0, 1.0, 1.0, 0.95)
+
+                Behavior on iconSize {
+                    NumberAnimation {
+                        duration: 120
+                        easing.type: Easing.OutBack
+                        easing.overshoot: 1.35
+                    }
                 }
+                Behavior on color { ColorAnimation { duration: 90 } }
+                Behavior on fill { NumberAnimation { duration: 90 } }
             }
         }
     }
 
-    // ── Floating Center Hub Button (Pixel-Aligned) ────────────────────────────
+    // ── Floating Center Hub Button (Dynamic Function Name / Close 'X') ────────
     Rectangle {
         id: centerBtn
         anchors.centerIn: parent
         width: root.innerRadius * 2
         height: root.innerRadius * 2
         radius: width / 2
-        color: root.centerHovered ? Qt.rgba(1.0, 1.0, 1.0, 0.20) : Qt.rgba(0.06, 0.06, 0.08, 0.42)
-        border.color: Qt.rgba(1.0, 1.0, 1.0, 0.22)
-        border.width: 1.5
+        color: root.centerHovered
+            ? Qt.rgba(1.0, 1.0, 1.0, 0.22)
+            : (root.activeHoverLabel !== ""
+                ? Qt.rgba(0.08, 0.08, 0.12, 0.65)
+                : Qt.rgba(0.06, 0.06, 0.08, 0.45))
+        border.color: root.activeHoverLabel !== ""
+            ? Qt.lighter(Appearance.colors.colPrimary, 1.25)
+            : Qt.rgba(1.0, 1.0, 1.0, 0.22)
+        border.width: root.activeHoverLabel !== "" ? 1.8 : 1.5
 
         scale: (root.hubScale >= 1.0) ? (root.centerHovered ? 1.06 : 1.0) : root.hubScale
         opacity: root.hubScale
 
-        Behavior on color { ColorAnimation { duration: 60 } }
+        Behavior on color { ColorAnimation { duration: 80 } }
+        Behavior on border.color { ColorAnimation { duration: 80 } }
 
+        // 1. Close 'X' Icon (shown when no slice is hovered)
         MaterialSymbol {
             anchors.centerIn: parent
-            text: root.currentTier === "main" ? "close" : "arrow_back"
+            text: "close"
             iconSize: root.centerHovered ? 24 : 22
             color: Qt.rgba(1.0, 1.0, 1.0, 0.95)
+            visible: root.activeHoverLabel === ""
+            opacity: root.activeHoverLabel === "" ? 1.0 : 0.0
+            Behavior on opacity { NumberAnimation { duration: 80 } }
             Behavior on iconSize { NumberAnimation { duration: 60 } }
+        }
+
+        // 2. Dynamic Segment / Function Name (shown when hovering any slice)
+        StyledText {
+            anchors.centerIn: parent
+            width: parent.width - 12
+            text: root.activeHoverLabel
+            font.pixelSize: Appearance.font.pixelSize.small
+            font.weight: Font.DemiBold
+            horizontalAlignment: Text.AlignHCenter
+            verticalAlignment: Text.AlignVCenter
+            wrapMode: Text.WordWrap
+            maximumLineCount: 2
+            elide: Text.ElideRight
+            color: Appearance.colors.colPrimary
+            visible: root.activeHoverLabel !== ""
+            opacity: root.activeHoverLabel !== "" ? 1.0 : 0.0
+            Behavior on opacity { NumberAnimation { duration: 80 } }
         }
     }
 }

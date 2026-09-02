@@ -36,11 +36,11 @@ Item {
     readonly property int outerRadius: 148      // Main Ring outer radius
     readonly property int iconRadius: Math.round((sliceInnerRadius + outerRadius) / 2) // 101px
 
-    readonly property int subInnerRadius: 156   // Concentric Outer Sub-Ring inner radius (8px gap)
-    readonly property int subOuterRadius: 216   // Concentric Outer Sub-Ring outer radius (60px thick)
-    readonly property int subIconRadius: Math.round((subInnerRadius + subOuterRadius) / 2) // 186px
+    readonly property int subInnerRadius: 168   // Concentric Outer Sub-Ring inner radius (clean floating gap from main ring)
+    readonly property int subOuterRadius: 228   // Concentric Outer Sub-Ring outer radius (60px thick)
+    readonly property int subIconRadius: Math.round((subInnerRadius + subOuterRadius) / 2) // 198px
 
-    readonly property int totalRadius: subOuterRadius + 40 // 256px bounds
+    readonly property int totalRadius: subOuterRadius + 44 // 272px bounds
 
     readonly property int sliceCount: currentSlices ? currentSlices.length : 0
     readonly property real sliceAngle: sliceCount > 0 ? (360.0 / sliceCount) : 360.0

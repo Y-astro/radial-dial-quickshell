@@ -1,87 +1,84 @@
-# Radial Dial for Hyprland & Quickshell
+# Radial Dial for Quickshell
 
-> A modern, GPU-accelerated, context-aware radial menu for **Hyprland** and **Quickshell** (`end4-pC` / *Illogical Impulse*).
-
----
-
-## ✨ Features
-
-- 🎨 **In-Menu Interactive Customizer**: **Right-click** on any slice to open the in-menu customizer modal:
-  - **Live Function Catalogue**: Browse 26+ built-in actions across Apps, Tools, Media Controls, Screen Capture, Window Management, and System Session.
-  - **Active State Indicators (`✓ Active`)**: Instantly see which functions are currently mapped to the active dial.
-  - **Dynamic Slice Management (`+` Add / `-` Remove)**: Add new functions or remove existing slices from the active dial with a single click.
-  - **Customizable File Jump**: Right-click on any File Jump target to edit its label, path, and icon, or click the `+` petal to add new destinations with a native directory picker and automatic drive mounting support.
-  - **Persistent User Configuration**: All changes are automatically saved atomically to `~/.config/radialMenu/config.json`.
-- 🔄 **Drag-to-Reorder Layout**: Left-click and drag any slice around the dial to reorder the menu layout dynamically. Slices highlight glowing drop targets with live preview badges and floating ghost icons.
-- 🔢 **Dynamic Number Hotkey Badges (1..9)**: Visual numbered badges directly map keyboard shortcuts `1` through `9` to slices. As you reorder or add/remove petals, hotkeys automatically refresh and synchronize with their new positions.
-- 🧩 **Universal Quickshell Compatibility**: Fully compatible with both **end4-pC** dotfiles and **standard standalone Quickshell** setups without missing module errors. Includes self-contained fallback widgets, dynamic cursor resolution, and native shortcuts.
-- 🎯 **Context-Aware Dynamic Menus**: Automatically identifies the active window underneath the cursor and adapts the dial:
-  - **Browser Context (Firefox, Zen, Chrome, etc.)**: 
-    - ⚡ **Real-Time Tab Switcher**: Sub-radial ring displaying all currently open browser tabs with full webpage titles on hover and instant `Alt+1..9` tab switching.
-    - 🆕 **Tab Operations**: New Tab, Close Tab, Duplicate Tab, and Reopen Closed Tab.
-    - 📥 **Scratchpad Manager**: Move browser windows to/from `special:special`.
-  - **Kitty / Terminal Context**: Scratchpad Manager, New Window (same directory & workspace), Clear Terminal (`Ctrl + L`), Run `agy`, and Open CWD in Dolphin file manager.
-  - **Global Desktop Context**: Scratchpad Manager, Terminal, Wallpaper Selector, System Monitor (`btop`), Session Power/Lock Menu, File Jump (Quick-copy to Downloads, Documents, Home, Temp), and Calculator.
-- 🚀 **Floating Rounded Wedges**: Segmented floating slices with smooth 6px rounded corners and radial gaps separating the inner hub from the outer wedges.
-- 🌊 **Organic Ripple Physics**: Active hovered slices expand by $+7\text{px}$ in radius and widen by $+6.4^\circ$, smoothly displacing adjacent slices in a continuous physics ripple wave.
-- 🪄 **Fluid Blossom Entrance Animation**: Center hub pops up with an energetic spring bounce, followed by outer slices blossoming clockwise around the clock. Automatically adapts to any slice count.
-- 🪟 **True GPU Frosted Glass Blur**: Uses compositor-level Hyprland shader blur across active windows and wallpapers (`xray = false`, `ignore_alpha = 0.15`).
-- 📥 **Scratchpad & Workspace Routing**: Send active windows directly to Hyprland's `special` workspace (toggled with `Super + S`), or expand the 8-workspace routing ring to send scratchpad windows back to any desktop.
-- ⚡ **Ultra-Low Resource Usage**: Built on GPU `FramebufferObject` rendering with zero CPU shadow bottlenecks.
+A GPU-accelerated, context-aware radial dial menu for Quickshell and Hyprland.
 
 ---
 
-## 📦 Quick Installation
+## Features
 
-Clone the repository and run the installer:
+- **Interactive In-Menu Customizer**: Right-click any slice to open the configuration modal:
+  - Select from 26+ built-in actions across Apps, Tools, Media, Screen Capture, Window Management, and System Session.
+  - Active indicators show which actions are mapped to the active dial.
+  - Add or remove slices dynamically per context dial.
+  - File Jump editor: add, edit, or remove folder destinations with native directory browsing and automatic disk partition mounting via udisksctl.
+  - Atomically persists layout and actions to `~/.config/radialMenu/config.json`.
+- **Drag-to-Reorder Layout**: Click and drag any segment around the dial to reposition slices in real time. Slices highlight drop targets with preview indicators and dynamic slot badges.
+- **Dynamic Number Hotkeys (1-9)**: Visual number badges on each wedge map to keyboard shortcuts 1 through 9. Hotkeys automatically synchronize whenever slices are reordered, added, or removed.
+- **Universal Quickshell Compatibility**: Runs on both end4-pC dotfiles and standard standalone Quickshell configurations with built-in fallbacks for colors, fonts, and cursors.
+- **Context-Aware Dial Modes**: Automatically inspects the active window under the cursor:
+  - **Browser Mode (Firefox, Zen, Chrome)**: Real-time tab switching with tab titles, tab close/new/duplicate operations, and scratchpad toggling.
+  - **Terminal Mode (Kitty)**: Scratchpad toggle, new terminal in current working directory, terminal clear, AI CLI, and file manager navigation.
+  - **Global Desktop Mode**: Scratchpad toggle, terminal launcher, wallpaper picker, system monitor, session controls, file jump, and calculator.
+- **Visual Design**:
+  - Segmented floating wedges with 6px rounded corners and radial gaps.
+  - Physics ripple effect expanding hovered slices by +7px and +6.4 degrees.
+  - Spring-animated blossom entrance and outside-in exit animations.
+  - True compositor-level frosted glass blur on Hyprland.
+- **Scratchpad Routing**: Direct window routing to Hyprland's special workspace, with an 8-workspace destination ring to return scratchpad windows to specific workspaces.
+
+---
+
+## Quick Installation
+
+Run the automated installer:
 
 ```bash
-git clone https://github.com/Y-astro/radial-dial-hyprland-end4-pC.git
-cd radial-dial-hyprland-end4-pC
+git clone https://github.com/Y-astro/radial-dial-quickshell.git
+cd radial-dial-quickshell
 chmod +x install.sh
 ./install.sh
 ```
 
-The installer automatically detects whether you are using an `end4-pC` configuration or a standard standalone Quickshell setup and sets up the appropriate modules and shortcuts.
+The installer detects your Quickshell configuration path, copies required modules, configures Hyprland layer rules, binds the shortcut, and registers the browser tab synchronization native messaging host.
 
-### Keybinding
-Once installed, press **`Super + Tab`** anywhere on your desktop or over any window to open the radial dial.
+### Default Keybinding
 
----
-
-## 🎨 Interactive Customization & Slices
-
-- **Right-Click Any Slice**: Opens the function picker modal to swap the function on that wedge.
-- **Search & Filter**: Search through the 26+ built-in actions or filter by category (`Apps`, `Tools`, `Media`, `Capture`, `Window`, `System`).
-- **Add / Remove Petals**: Use the `+` button in the edit menu to append a new slice to the current dial, or `-` to remove an active slice.
-- **File Jump Customization**: Click the `+` petal on the File Jump ring or right-click any existing folder target to configure the destination path using the built-in file picker. Auto-mounts external drives if unmounted.
-- **Drag-to-Reorder**: Click and hold any slice, then drag it around the dial to reorder positions. Hovering over another slice previews the drop slot, and releasing applies the new layout instantly.
-- **Dynamic Number Hotkeys (1..9)**: Each wedge shows its corresponding number hotkey badge. Hotkeys follow the rearranged slices automatically, so pressing `1`..`9` always triggers whatever is at that slot.
-- **Persistence**: Configuration is stored in `~/.config/radialMenu/config.json`. To reset to default, simply delete this file.
+Press `Super + Tab` anywhere on your desktop or over any window to toggle the radial dial.
 
 ---
 
-## 🌐 Real-Time Browser Tab Sync (0ms Latency)
+## Usage and Customization
 
-For instantaneous (0ms) browser tab sync in Firefox / Zen / Librewolf:
-
-1. Open Firefox and go to: `about:debugging#/runtime/this-firefox`
-2. Click **"Load Temporary Add-on..."**
-3. Select `manifest.json` located in `modules/ii/radialMenu/extension/manifest.json`.
+- **Execute Action**: Left-click any slice or press its corresponding number key (1 through 9).
+- **Open Sub-Ring**: Left-click slices with sub-tiers (such as File Jump or Browser Tabs) to expand localized outer petals.
+- **Reorder Slices**: Left-click and hold a slice, drag it to the desired position, and release.
+- **Configure Slice**: Right-click any slice to open the action customizer.
+- **Add / Remove Slices**: In the customizer, use + to append a new slice or - to remove an active one.
+- **Cancel / Close**: Press Escape or click the center hub button to close the menu.
 
 ---
 
-## 🛠️ Manual Installation
+## Browser Tab Synchronization (Optional)
 
-If you prefer to install manually into your `~/.config/quickshell/end4-pC/` setup:
+For zero-latency browser tab switching in Firefox, Zen, or LibreWolf:
 
-1. **Copy Module**:
+1. Navigate to `about:debugging#/runtime/this-firefox` in your browser.
+2. Click "Load Temporary Add-on...".
+3. Select `manifest.json` located at `modules/ii/radialMenu/extension/manifest.json`.
+
+---
+
+## Manual Installation
+
+To install manually into `~/.config/quickshell/end4-pC/`:
+
+1. Copy the module:
    ```bash
    cp -r modules/ii/radialMenu ~/.config/quickshell/end4-pC/modules/ii/
    chmod +x ~/.config/quickshell/end4-pC/modules/ii/radialMenu/*.py
    ```
 
-2. **Add Hyprland Layer Rules** (`~/.config/hypr/hyprland/rules.lua`):
+2. Add Hyprland layer rules in `~/.config/hypr/hyprland/rules.lua`:
    ```lua
    hl.layer_rule({ match = { namespace = "quickshell:radialMenu" }, blur = true })
    hl.layer_rule({ match = { namespace = "quickshell:radialMenu" }, ignore_alpha = 0.15 })
@@ -89,33 +86,30 @@ If you prefer to install manually into your `~/.config/quickshell/end4-pC/` setu
    hl.layer_rule({ match = { namespace = "quickshell:radialMenu" }, no_anim = true })
    ```
 
-3. **Add Hyprland Keybinding** (`~/.config/hypr/hyprland/keybinds.lua`):
+3. Bind the shortcut in `~/.config/hypr/hyprland/keybinds.lua`:
    ```lua
    hl.bind("SUPER + Tab", hl.dsp.global("quickshell:radialMenu"), { description = "Shell: Open radial menu at cursor" })
    ```
 
-4. **Instantiate in Quickshell** (`panelFamilies/IllogicalImpulseFamily.qml`):
+4. Instantiate the component in `panelFamilies/IllogicalImpulseFamily.qml`:
    ```qml
    import qs.modules.ii.radialMenu
 
-   // Inside the component:
    RadialMenu {}
    ```
 
-5. **Reload**:
-   ```bash
-   hyprctl reload
-   killall qs quickshell && qs -c end4-pC -d
-   ```
+---
+
+## Configuration File
+
+Customizations are stored in JSON format at:
+```
+~/.config/radialMenu/config.json
+```
+Deleting this file restores default slices and settings.
 
 ---
 
-## ⚙️ Customization
+## License
 
-All menu actions, contexts, shortcuts, and ring geometries can be customized in [`RadialMenuActions.qml`](modules/ii/radialMenu/RadialMenuActions.qml) and [`RadialMenuContent.qml`](modules/ii/radialMenu/RadialMenuContent.qml).
-
----
-
-## 📄 License
-
-MIT License © [Y-astro](https://github.com/Y-astro)
+MIT License.

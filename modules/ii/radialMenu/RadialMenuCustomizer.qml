@@ -101,6 +101,10 @@ Item {
     }
 
     function close() {
+        if (folderBrowser.active) {
+            folderBrowser.active = false
+            return
+        }
         root.active = false
     }
 
@@ -584,7 +588,7 @@ Item {
 
                             HoverHandler { id: browseHover }
                             TapHandler {
-                                onTapped: RadialMenuActions.openDirectoryPicker()
+                                onTapped: folderBrowser.open(root.fileTargetPath || "~")
                             }
                         }
                     }
@@ -745,6 +749,19 @@ Item {
                         }
                     }
                 }
+            }
+        }
+    }
+
+    // ── Dedicated In-Dial Folder Browser Window (pops up on top of dial) ─────
+    RadialMenuFolderBrowser {
+        id: folderBrowser
+        anchors.fill: parent
+        z: 300
+        onFolderSelected: (path, name) => {
+            root.fileTargetPath = path
+            if (root.fileTargetLabel === "" || root.fileTargetLabel === "Folder") {
+                root.fileTargetLabel = name
             }
         }
     }

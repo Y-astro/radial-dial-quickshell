@@ -39,6 +39,7 @@ echo -e "${BLUE}[*] Installing radialMenu module...${RESET}"
 mkdir -p "$QS_DIR/modules/ii/radialMenu"
 cp -r "$SCRIPT_DIR/modules/ii/radialMenu/"* "$QS_DIR/modules/ii/radialMenu/"
 chmod +x "$QS_DIR/modules/ii/radialMenu/get_browser_tabs.py" 2>/dev/null || true
+chmod +x "$QS_DIR/modules/ii/radialMenu/folder_browser.py" 2>/dev/null || true
 chmod +x "$QS_DIR/modules/ii/radialMenu/extension/native_host.py" 2>/dev/null || true
 echo -e "${GREEN}[✓] radialMenu module copied.${RESET}"
 

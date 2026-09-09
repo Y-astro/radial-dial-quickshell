@@ -67,6 +67,10 @@ Item {
 
     // Drag-to-Reorder Slice State
     property bool isDraggingSlice: false
+    // Hold-and-Flick Release Activation State
+    property bool flickModeArmed: true
+    property bool cursorMovedFlick: false
+    property real flickOpenTime: 0
     property bool wasDraggingSlice: false
     property int dragFromIndex: -1
     property int dragTargetIndex: -1
@@ -86,7 +90,7 @@ Item {
             }
         }
         if (outerHoveredIndex >= 0 && subSlices && subSlices[outerHoveredIndex]) {
-            return subSlices[outerHoveredIndex].label || ""
+            return subSlices[outerHoveredIndex].fullTitle || subSlices[outerHoveredIndex].label || ""
         }
         if (hoveredIndex >= 0 && currentSlices && currentSlices[hoveredIndex]) {
             return currentSlices[hoveredIndex].label || ""
@@ -429,6 +433,46 @@ Item {
         }
 
         return false
+    }
+
+    Keys.onReleased: (event) => {
+        // Guard 1: Never trigger or close if customizer or folderBrowser is active
+        if (customizer.active || folderBrowser.active) {
+            return
+        }
+        // Guard 2: Never trigger or close if sub-tier is open
+        if (root.activeSubTier !== "") {
+            return
+        }
+        // Guard 3: Must be armed
+        if (!root.flickModeArmed) {
+            return
+        }
+
+        // Check if released key is a launcher modifier or trigger key
+        const isTriggerKey = (event.key === Qt.Key_Super_L || event.key === Qt.Key_Super_R ||
+                              event.key === Qt.Key_Tab || event.key === Qt.Key_Alt ||
+                              (event.modifiers & Qt.MetaModifier) === 0)
+
+        if (isTriggerKey) {
+            if (root.cursorMovedFlick && root.hoveredIndex >= 0 && root.hoveredIndex < root.sliceCount) {
+                // User held key, flicked to wedge, and released!
+                const slice = root.currentSlices[root.hoveredIndex]
+                root.flickModeArmed = false
+                if (slice) {
+                    if (slice.hasSubTier) {
+                        root.updateSubTier(slice.subTierType, root.hoveredIndex)
+                    } else if (typeof slice.action === "function") {
+                        root.closeAnimated(slice.action)
+                    }
+                }
+                event.accepted = true
+                return
+            } else {
+                // User released without a flick: disarm flick mode so dial stays open in sticky mode
+                root.flickModeArmed = false
+            }
+        }
     }
 
     Keys.onPressed: (event) => {
@@ -836,6 +880,11 @@ Item {
             root.dragCurrentMouseX = mouse.x
             root.dragCurrentMouseY = mouse.y
 
+            const distFromCenter = Math.hypot(mouse.x - root.cx, mouse.y - root.cy)
+            if (distFromCenter > 32) {
+                root.cursorMovedFlick = true
+            }
+
             // Handle Drag-to-Reorder when left button is held
             if ((mouse.buttons & Qt.LeftButton) && root.dragFromIndex >= 0 && root.dragFromIndex < root.sliceCount) {
                 const moveDist = Math.hypot(mouse.x - root.dragStartX, mouse.y - root.dragStartY)
@@ -917,6 +966,39 @@ Item {
             if (root.hoveredIndex !== -1) root.hoveredIndex = -1
             if (root.outerHoveredIndex !== -1) root.outerHoveredIndex = -1
             if (root.centerHovered) root.centerHovered = false
+        }
+
+        onWheel: (wheel) => {
+            if (root.hoveredIndex >= 0 && root.hoveredIndex < root.sliceCount) {
+                const slice = root.currentSlices[root.hoveredIndex]
+                if (!slice) return
+                const fid = String(slice.functionId || slice.id || "").toLowerCase()
+                const delta = wheel.angleDelta.y
+
+                if (fid.includes("volume") || fid.includes("media") || fid.includes("audio") || fid.includes("sound")) {
+                    if (delta > 0) RadialMenuActions.adjustVolume(5)
+                    else if (delta < 0) RadialMenuActions.adjustVolume(-5)
+                    wheel.accepted = true
+                    return
+                }
+
+                if (fid.includes("brightness") || fid.includes("light")) {
+                    if (delta > 0) RadialMenuActions.adjustBrightness(5)
+                    else if (delta < 0) RadialMenuActions.adjustBrightness(-5)
+                    wheel.accepted = true
+                    return
+                }
+
+                if (slice.hasSubTier && root.activeSubTier === slice.subTierType && root.subSliceCount > 0) {
+                    if (delta < 0) {
+                        root.outerHoveredIndex = (root.outerHoveredIndex + 1) % root.subSliceCount
+                    } else if (delta > 0) {
+                        root.outerHoveredIndex = (root.outerHoveredIndex - 1 + root.subSliceCount) % root.subSliceCount
+                    }
+                    wheel.accepted = true
+                    return
+                }
+            }
         }
 
         onClicked: (mouse) => {

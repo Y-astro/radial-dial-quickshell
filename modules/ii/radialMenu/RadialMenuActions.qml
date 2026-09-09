@@ -15,6 +15,87 @@ Singleton {
     signal configChanged()
     signal directoryPicked(string path)
 
+    readonly property string ipcScriptPath: {
+        const u = Qt.resolvedUrl("hypr_ipc.py").toString()
+        return u.startsWith("file://") ? u.substring(7) : u
+    }
+
+    property var cachedClips: []
+    property var cachedSinks: []
+    property var cachedClients: []
+
+    Process {
+        id: fetchClipsProc
+        command: ["python3", root.ipcScriptPath, "clipboard"]
+        running: false
+        stdout: StdioCollector {
+            onStreamFinished: {
+                try { root.cachedClips = JSON.parse(text.trim()) } catch(e) {}
+            }
+        }
+    }
+    function refreshClipboard() { fetchClipsProc.running = true }
+
+    Process {
+        id: fetchSinksProc
+        command: ["python3", root.ipcScriptPath, "audio_sinks"]
+        running: false
+        stdout: StdioCollector {
+            onStreamFinished: {
+                try { root.cachedSinks = JSON.parse(text.trim()) } catch(e) {}
+            }
+        }
+    }
+    function refreshAudioSinks() { fetchSinksProc.running = true }
+
+    Process {
+        id: fetchClientsProc
+        command: ["python3", root.ipcScriptPath, "clients"]
+        running: false
+        stdout: StdioCollector {
+            onStreamFinished: {
+                try { root.cachedClients = JSON.parse(text.trim()) } catch(e) {}
+            }
+        }
+    }
+    function refreshClients() { fetchClientsProc.running = true }
+
+    function focusWindow(addr: string) {
+        if (!addr) return
+        try {
+            Hyprland.dispatch('hl.dsp.focus({ window = "address:' + addr + '" })')
+        } catch(e) {}
+        try {
+            Hyprland.dispatch('focuswindow address:' + addr)
+        } catch(e) {}
+    }
+
+    function resolveAppIcon(appClass: string) {
+        const c = (appClass || "").toLowerCase()
+        if (c.includes("firefox") || c.includes("zen") || c.includes("chrome") || c.includes("chromium") || c.includes("brave") || c.includes("browser")) return "globe"
+        if (c.includes("kitty") || c.includes("terminal") || c.includes("alacritty") || c.includes("foot") || c.includes("konsole") || c.includes("xterm")) return "terminal"
+        if (c.includes("code") || c.includes("cursor") || c.includes("antigravity") || c.includes("nvim") || c.includes("studio") || c.includes("dev")) return "code"
+        if (c.includes("discord") || c.includes("vesktop") || c.includes("telegram") || c.includes("slack") || c.includes("whatsapp")) return "chat"
+        if (c.includes("spotify") || c.includes("music") || c.includes("rhythmbox")) return "music_note"
+        if (c.includes("dolphin") || c.includes("nautilus") || c.includes("thunar") || c.includes("nemo") || c.includes("file")) return "folder"
+        if (c.includes("mpv") || c.includes("vlc") || c.includes("video") || c.includes("media")) return "movie"
+        if (c.includes("calc") || c.includes("calculator") || c.includes("kcalc")) return "calculate"
+        if (c.includes("settings") || c.includes("control")) return "settings"
+        return "window"
+    }
+
+    function adjustVolume(deltaPercent: int) {
+        const sign = deltaPercent >= 0 ? "+" : "-"
+        const mag = Math.abs(deltaPercent)
+        exec("wpctl set-volume @DEFAULT_AUDIO_SINK@ " + mag + "%" + sign + " || pactl set-sink-volume @DEFAULT_SINK@ " + sign + mag + "%")
+    }
+
+    function adjustBrightness(deltaPercent: int) {
+        const sign = deltaPercent >= 0 ? "+" : "-"
+        const mag = Math.abs(deltaPercent)
+        exec("brightnessctl s " + mag + "%" + sign)
+    }
+
     // Execute arbitrary bash command detached
     function exec(cmd: string) {
         Quickshell.execDetached(["bash", "-c", cmd])
@@ -27,6 +108,8 @@ Singleton {
         const title = String(win.title || "").toLowerCase()
         if (c.includes("kitty") || c.includes("konsole") || c.includes("alacritty") || c.includes("foot")) return "kitty"
         if (/firefox|brave|chrome|chromium|thorium|zen|floorp|vivaldi|opera|edge|librewolf|waterfox/.test(c) || /firefox|brave|chrome|chromium|zen|librewolf/.test(title)) return "browser"
+        if (/code|cursor|antigravity|vscodium|nvim|neovim/.test(c)) return "code"
+        if (/mpv|spotify|vlc/.test(c)) return "media"
         return "default"
     }
 
@@ -250,6 +333,172 @@ except Exception:
             category: "Apps",
             desc: "Open system settings",
             action: () => exec("systemsettings || gnome-control-center &")
+        },
+
+        // Window Management & Active Apps
+        "active_apps": {
+            id: "active_apps",
+            label: "Active Apps",
+            icon: "apps",
+            category: "Window",
+            desc: "Switch to any running application across all workspaces",
+            hasSubTier: true,
+            subTierType: "active_apps",
+            action: null
+        },
+
+        // Category 1 Optional Features (Clipboard, Audio Output, Snip, OCR)
+        "clipboard": {
+            id: "clipboard",
+            label: "Clipboard",
+            icon: "content_paste",
+            category: "Tools",
+            desc: "Quick paste recent clipboard history snippets",
+            hasSubTier: true,
+            subTierType: "clipboard",
+            action: null
+        },
+        "audio_sink": {
+            id: "audio_sink",
+            label: "Audio Output",
+            icon: "volume_up",
+            category: "Media",
+            desc: "Switch default audio output device (Headphones/Speakers)",
+            hasSubTier: true,
+            subTierType: "audio_sink",
+            action: null
+        },
+        "color_picker": {
+            id: "color_picker",
+            label: "Color Picker",
+            icon: "palette",
+            category: "Tools",
+            desc: "Inspect on-screen color and copy HEX code to clipboard",
+            action: () => exec("hyprpicker -a &")
+        },
+        "screen_snip": {
+            id: "screen_snip",
+            label: "Screen Snip",
+            icon: "screenshot_region",
+            category: "Capture",
+            desc: "Interactive area screenshot directly to clipboard",
+            action: () => exec("grim -g \"$(slurp)\" - | wl-copy && notify-send -a 'Radial Menu' 'Screenshot' 'Area copied to clipboard' &")
+        },
+        "screen_ocr": {
+            id: "screen_ocr",
+            label: "Screen OCR",
+            icon: "document_scanner",
+            category: "Tools",
+            desc: "Optical character recognition: grab unselectable text from screen",
+            action: () => exec("tmp=\"/tmp/ocr_$$\"; grim -g \"$(slurp)\" \"$tmp.png\" && tesseract \"$tmp.png\" \"$tmp\" -l eng 2>/dev/null && cat \"$tmp.txt\" | tr -d '\\f' | wl-copy && rm -f \"$tmp\"* && notify-send -a 'Radial Menu' 'Screen OCR' 'Recognized text copied to clipboard' &")
+        },
+
+        // Code Editor Functions (Category 3: 8)
+        "code_git_status": {
+            id: "code_git_status",
+            label: "Git Changes",
+            icon: "commit",
+            category: "Tools",
+            desc: "Open Git source control in editor",
+            action: () => exec("wtype -M ctrl -M shift -k g -m shift -m ctrl &")
+        },
+        "code_terminal": {
+            id: "code_terminal",
+            label: "Editor Terminal",
+            icon: "terminal",
+            category: "Tools",
+            desc: "Toggle integrated terminal in editor",
+            action: () => exec("wtype -M ctrl -k grave -m ctrl &")
+        },
+        "code_format": {
+            id: "code_format",
+            label: "Format Document",
+            icon: "format_align_left",
+            category: "Tools",
+            desc: "Format document with code formatter",
+            action: () => exec("wtype -M shift -M alt -k f -m alt -m shift &")
+        },
+        "code_palette": {
+            id: "code_palette",
+            label: "Command Palette",
+            icon: "terminal",
+            category: "Tools",
+            desc: "Open editor command palette",
+            action: () => exec("wtype -M ctrl -M shift -k p -m shift -m ctrl &")
+        },
+        "code_run": {
+            id: "code_run",
+            label: "Run File",
+            icon: "play_arrow",
+            category: "Tools",
+            desc: "Run file without debugging in editor",
+            action: () => exec("wtype -M ctrl -k F5 -m ctrl &")
+        },
+
+        // Media Controls (Category 3: 9)
+        "media_play_pause": {
+            id: "media_play_pause",
+            label: "Play / Pause",
+            icon: "play_arrow",
+            category: "Media",
+            desc: "Toggle media playback",
+            action: () => exec("playerctl play-pause &")
+        },
+        "media_next": {
+            id: "media_next",
+            label: "Next Track",
+            icon: "skip_next",
+            category: "Media",
+            desc: "Skip to next media track",
+            action: () => exec("playerctl next &")
+        },
+        "media_prev": {
+            id: "media_prev",
+            label: "Previous Track",
+            icon: "skip_previous",
+            category: "Media",
+            desc: "Skip to previous media track",
+            action: () => exec("playerctl previous &")
+        },
+        "media_mute": {
+            id: "media_mute",
+            label: "Mute Toggle",
+            icon: "volume_off",
+            category: "Media",
+            desc: "Toggle audio mute",
+            action: () => exec("wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle &")
+        },
+        "volume_up": {
+            id: "volume_up",
+            label: "Volume +5%",
+            icon: "volume_up",
+            category: "Media",
+            desc: "Increase master volume",
+            action: () => adjustVolume(5)
+        },
+        "volume_down": {
+            id: "volume_down",
+            label: "Volume -5%",
+            icon: "volume_down",
+            category: "Media",
+            desc: "Decrease master volume",
+            action: () => adjustVolume(-5)
+        },
+        "brightness_up": {
+            id: "brightness_up",
+            label: "Brightness +",
+            icon: "brightness_high",
+            category: "Tools",
+            desc: "Increase display brightness",
+            action: () => adjustBrightness(5)
+        },
+        "brightness_down": {
+            id: "brightness_down",
+            label: "Brightness -",
+            icon: "brightness_low",
+            category: "Tools",
+            desc: "Decrease display brightness",
+            action: () => adjustBrightness(-5)
         },
 
         // Tools & Radial Features
@@ -634,13 +883,17 @@ except Exception:
         let key = "globalSlices"
         if (context === "kitty") key = "kittySlices"
         else if (context === "browser") key = "browserSlices"
+        else if (context === "code") key = "codeSlices"
+        else if (context === "media") key = "mediaSlices"
 
         if (root.userConfig && Array.isArray(root.userConfig[key])) {
             return root.userConfig[key]
         }
-        if (key === "kittySlices") return ["scratchpad", "kitty_new_window", "kitty_agy", "kitty_clear", "kitty_dolphin"]
-        if (key === "browserSlices") return ["scratchpad", "browsertabs", "browser_new_tab", "browser_close_tab", "browser_dup_tab", "browser_reopen_tab"]
-        return ["scratchpad", "terminal", "wallpapers", "btop", "session", "filejump", "calc"]
+        if (key === "kittySlices") return ["scratchpad", "kitty_new_window", "kitty_agy", "kitty_clear", "kitty_dolphin", "active_apps"]
+        if (key === "browserSlices") return ["scratchpad", "browsertabs", "browser_new_tab", "browser_close_tab", "browser_dup_tab", "browser_reopen_tab", "active_apps"]
+        if (key === "codeSlices") return ["scratchpad", "code_palette", "code_terminal", "code_git_status", "code_format", "code_run", "active_apps"]
+        if (key === "mediaSlices") return ["scratchpad", "media_play_pause", "media_prev", "media_next", "volume_up", "volume_down", "audio_sink", "active_apps"]
+        return ["scratchpad", "terminal", "wallpapers", "btop", "session", "filejump", "calc", "active_apps"]
     }
 
     // Add a function to the current dial (modifies dial structure)
@@ -649,6 +902,8 @@ except Exception:
         let key = "globalSlices"
         if (context === "kitty") key = "kittySlices"
         else if (context === "browser") key = "browserSlices"
+        else if (context === "code") key = "codeSlices"
+        else if (context === "media") key = "mediaSlices"
 
         if (!Array.isArray(cfg[key])) {
             cfg[key] = getActiveSliceIds(context).slice()
@@ -666,6 +921,8 @@ except Exception:
         let key = "globalSlices"
         if (context === "kitty") key = "kittySlices"
         else if (context === "browser") key = "browserSlices"
+        else if (context === "code") key = "codeSlices"
+        else if (context === "media") key = "mediaSlices"
 
         if (!Array.isArray(cfg[key])) {
             cfg[key] = getActiveSliceIds(context).slice()
@@ -686,6 +943,8 @@ except Exception:
         let key = "globalSlices"
         if (context === "kitty") key = "kittySlices"
         else if (context === "browser") key = "browserSlices"
+        else if (context === "code") key = "codeSlices"
+        else if (context === "media") key = "mediaSlices"
 
         if (!Array.isArray(cfg[key])) {
             cfg[key] = []
@@ -708,6 +967,8 @@ except Exception:
         let key = "globalSlices"
         if (context === "kitty") key = "kittySlices"
         else if (context === "browser") key = "browserSlices"
+        else if (context === "code") key = "codeSlices"
+        else if (context === "media") key = "mediaSlices"
 
         if (!Array.isArray(cfg[key])) {
             cfg[key] = getActiveSliceIds(context).slice()
@@ -755,9 +1016,165 @@ except Exception:
         }
     }
 
+    // ── Active Apps Sub-Slice Generator (All Workspaces) ────────────────────
+    function getActiveAppsSubSlices() {
+        let clients = []
+        if (GlobalStates.activeClientsList && Array.isArray(GlobalStates.activeClientsList) && GlobalStates.activeClientsList.length > 0) {
+            clients = GlobalStates.activeClientsList
+        } else if (typeof HyprlandData !== "undefined" && HyprlandData.windowList && HyprlandData.windowList.length > 0) {
+            clients = HyprlandData.windowList
+        } else if (root.cachedClients && root.cachedClients.length > 0) {
+            clients = root.cachedClients
+        } else {
+            refreshClients()
+            clients = root.cachedClients || []
+        }
+
+        const validClients = clients.filter(c => {
+            if (!c || !c.address) return false
+            const wsName = c.workspace ? (c.workspace.name || String(c.workspace.id || "")) : (c.workspaceId ? String(c.workspaceId) : "")
+            if (wsName.startsWith("special:quickshell")) return false
+            return true
+        })
+
+        if (validClients.length === 0) {
+            return [{
+                id: "no_windows",
+                label: "No Open Apps",
+                icon: "info",
+                hasSubTier: false,
+                action: () => {}
+            }]
+        }
+
+        const classCounts = {}
+        validClients.forEach(c => {
+            const cls = (c.class || "App").toLowerCase()
+            classCounts[cls] = (classCounts[cls] || 0) + 1
+        })
+
+        const classSeen = {}
+        return validClients.map((c, i) => {
+            const rawClass = c.class || "App"
+            const lowerClass = rawClass.toLowerCase()
+            const wsName = c.workspace ? (c.workspace.name || String(c.workspace.id || "")) : (c.workspaceId ? String(c.workspaceId) : "1")
+            classSeen[lowerClass] = (classSeen[lowerClass] || 0) + 1
+
+            let displayLabel = rawClass.charAt(0).toUpperCase() + rawClass.slice(1)
+            if (classCounts[lowerClass] > 1) {
+                displayLabel += " #" + classSeen[lowerClass]
+            }
+            displayLabel += " [WS " + wsName + "]"
+
+            const iconName = resolveAppIcon(lowerClass)
+            const addr = c.address
+
+            return {
+                id: "app_" + addr,
+                label: displayLabel,
+                fullTitle: (c.title ? (c.title + " (" + rawClass + ")") : displayLabel),
+                icon: iconName,
+                hasSubTier: false,
+                action: () => focusWindow(addr)
+            }
+        })
+    }
+
+    // ── Clipboard History Sub-Slice Generator ─────────────────────────────────
+    function getClipboardSubSlices() {
+        refreshClipboard()
+        const clips = (root.cachedClips && root.cachedClips.length > 0) ? root.cachedClips : []
+        if (clips.length === 0) {
+            return [{
+                id: "no_clips",
+                label: "Clipboard Empty",
+                icon: "content_paste_off",
+                hasSubTier: false,
+                action: () => {}
+            }]
+        }
+        return clips.map((item, idx) => ({
+            id: "clip_" + item.id,
+            label: item.preview || ("Item " + (idx + 1)),
+            fullTitle: item.full || item.preview,
+            icon: "assignment",
+            hasSubTier: false,
+            action: () => {
+                Quickshell.execDetached(["python3", root.ipcScriptPath, "paste", String(item.id)])
+            }
+        }))
+    }
+
+    // ── PipeWire Audio Sinks Sub-Slice Generator ──────────────────────────────
+    function getAudioSinksSubSlices() {
+        refreshAudioSinks()
+        const sinks = (root.cachedSinks && root.cachedSinks.length > 0) ? root.cachedSinks : []
+        if (sinks.length === 0) {
+            return [{
+                id: "no_sinks",
+                label: "No Sinks Found",
+                icon: "volume_off",
+                hasSubTier: false,
+                action: () => {}
+            }]
+        }
+        return sinks.map((s, idx) => ({
+            id: "sink_" + s.id,
+            label: s.name,
+            fullTitle: s.fullName + (s.default ? " (Active)" : ""),
+            icon: s.default ? "check_circle" : "speaker",
+            hasSubTier: false,
+            action: () => {
+                Quickshell.execDetached(["python3", root.ipcScriptPath, "set_sink", String(s.id)])
+            }
+        }))
+    }
+
+    // ── Helper to resolve slice item ──────────────────────────────────────────
+    function resolveSliceItem(fnId: string, slotIdx: int, win) {
+        if (fnId === "scratchpad") {
+            const sp = getScratchpadSlice(win)
+            sp.slotIndex = slotIdx
+            sp.functionId = "scratchpad"
+            return sp
+        }
+        const def = root.functionRegistry[fnId]
+        if (!def) {
+            return {
+                slotIndex: slotIdx,
+                functionId: fnId,
+                label: fnId,
+                icon: "extension",
+                hasSubTier: false,
+                action: () => {}
+            }
+        }
+        return {
+            slotIndex: slotIdx,
+            functionId: fnId,
+            label: def.label,
+            icon: def.icon,
+            hasSubTier: !!def.hasSubTier,
+            subTierType: def.subTierType || "",
+            action: def.action
+        }
+    }
+
     // ── Slices Generator ──────────────────────────────────────────────────────
     function getSlicesFor(tier: string, context: string, win) {
         // Scratchpad Workspace Selector Ring
+        if (tier === "active_apps") {
+            return getActiveAppsSubSlices()
+        }
+
+        if (tier === "clipboard") {
+            return getClipboardSubSlices()
+        }
+
+        if (tier === "audio_sink") {
+            return getAudioSinksSubSlices()
+        }
+
         if (tier === "scratchpad") {
             return [
                 { label: "Workspace 1", icon: "counter_1", action: () => moveToWorkspace(1) },

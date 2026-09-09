@@ -40,6 +40,7 @@ mkdir -p "$QS_DIR/modules/ii/radialMenu"
 cp -r "$SCRIPT_DIR/modules/ii/radialMenu/"* "$QS_DIR/modules/ii/radialMenu/"
 chmod +x "$QS_DIR/modules/ii/radialMenu/get_browser_tabs.py" 2>/dev/null || true
 chmod +x "$QS_DIR/modules/ii/radialMenu/folder_browser.py" 2>/dev/null || true
+chmod +x "$QS_DIR/modules/ii/radialMenu/hypr_ipc.py" 2>/dev/null || true
 chmod +x "$QS_DIR/modules/ii/radialMenu/extension/native_host.py" 2>/dev/null || true
 echo -e "${GREEN}[✓] radialMenu module copied.${RESET}"
 
@@ -71,7 +72,7 @@ patch = '''
 
     Process {
         id: radialMenuCursorProc
-        command: ['bash', '-c', 'WIN=\$(hyprctl activewindow -j 2>/dev/null); [[ -z \"\$WIN\" || \"\$WIN\" == \"Invalid window\"* ]] && WIN=\"{}\"; TABS=\$(python3 $QS_DIR/modules/ii/radialMenu/get_browser_tabs.py 2>/dev/null || echo \"[]\"); echo \"{\\\\\"cursor\\\\\": \$(hyprctl cursorpos -j 2>/dev/null || echo \'{\\\\\"x\\\\\":0,\\\\\"y\\\\\":0}\'), \\\\\"window\\\\\": \$WIN, \\\\\"tabs\\\\\": \$TABS}\"']
+        command: ['python3', '$QS_DIR/modules/ii/radialMenu/hypr_ipc.py', 'context']
         running: false
         stdout: StdioCollector {
             onStreamFinished: {

@@ -7,18 +7,29 @@ A GPU-accelerated, context-aware radial dial menu for Quickshell and Hyprland.
 ## Features
 
 - **Interactive In-Menu Customizer**: Right-click any slice to open the configuration modal:
-  - Select from 26+ built-in actions across Apps, Tools, Media, Screen Capture, Window Management, and System Session.
+  - Select from 30+ built-in actions across Apps, Tools, Media, Screen Capture, Window Management, and System Session.
   - Active indicators show which actions are mapped to the active dial.
   - Add or remove slices dynamically per context dial.
   - File Jump editor: add, edit, or remove folder destinations with native directory browsing and automatic disk partition mounting via udisksctl.
   - Atomically persists layout and actions to `~/.config/radialMenu/config.json`.
+- **Hold-and-Flick Release Activation**: Hold `Super + Tab`, flick the cursor toward any segment, and release the key to trigger the action in under 80ms. If tapped without flicking, or when using the customizer or folder picker, the dial remains open in sticky interactive mode.
+- **Active Apps Switcher**: Dedicated segment present across all dials to view and switch to any running application across all workspaces. Multi-instance apps show each window instance distinctly with workspace badges and full window titles on hover.
 - **Drag-to-Reorder Layout**: Click and drag any segment around the dial to reposition slices in real time. Slices highlight drop targets with preview indicators and dynamic slot badges.
 - **Dynamic Number Hotkeys (1-9)**: Visual number badges on each wedge map to keyboard shortcuts 1 through 9. Hotkeys automatically synchronize whenever slices are reordered, added, or removed.
-- **Universal Quickshell Compatibility**: Runs on both end4-pC dotfiles and standard standalone Quickshell configurations with built-in fallbacks for colors, fonts, and cursors.
+- **Mouse Wheel Scrubbing on Slices**: Hover over volume or brightness slices and scroll the mouse wheel to smoothly adjust levels without clicking.
+- **Direct UNIX Socket IPC**: Sub-millisecond window and cursor queries through direct connection to the Hyprland UNIX socket, eliminating process fork overhead.
+- **Optional High-Frequency Tools (Customizer)**:
+  - Clipboard History: sub-ring displaying recent cliphist snippets with instant paste.
+  - Audio Output Switcher: PipeWire sub-ring to switch between speakers, headphones, and Bluetooth.
+  - Color Picker: inspect on-screen pixels with hyprpicker and copy HEX color code.
+  - Screen Snip: interactive region capture directly to clipboard.
+  - Screen OCR: optical character recognition to extract unselectable text from screen.
 - **Context-Aware Dial Modes**: Automatically inspects the active window under the cursor:
   - **Browser Mode (Firefox, Zen, Chrome)**: Real-time tab switching with tab titles, tab close/new/duplicate operations, and scratchpad toggling.
   - **Terminal Mode (Kitty)**: Scratchpad toggle, new terminal in current working directory, terminal clear, AI CLI, and file manager navigation.
-  - **Global Desktop Mode**: Scratchpad toggle, terminal launcher, wallpaper picker, system monitor, session controls, file jump, and calculator.
+  - **Code Editor Mode (VS Code, Cursor, Neovim)**: Command palette, terminal toggle, Git changes, format document, and run file.
+  - **Media Player Mode (MPV, Spotify)**: Play/pause, track navigation, volume adjustments, and audio output switching.
+  - **Global Desktop Mode**: Scratchpad toggle, terminal launcher, wallpaper picker, system monitor, session controls, file jump, active apps, and calculator.
 - **Visual Design**:
   - Segmented floating wedges with 6px rounded corners and radial gaps.
   - Physics ripple effect expanding hovered slices by +7px and +6.4 degrees.
@@ -47,10 +58,13 @@ Press `Super + Tab` anywhere on your desktop or over any window to toggle the ra
 
 ---
 
-## Usage and Customization
+## Usage and Controls
 
+- **Hold and Flick**: Press and hold `Super + Tab`, flick mouse toward a slice, and release the key to execute immediately.
+- **Sticky Mode**: Tap `Super + Tab` without moving the mouse to keep the menu open.
 - **Execute Action**: Left-click any slice or press its corresponding number key (1 through 9).
-- **Open Sub-Ring**: Left-click slices with sub-tiers (such as File Jump or Browser Tabs) to expand localized outer petals.
+- **Wheel Scrubbing**: Hover over volume, brightness, or media slices and scroll the mouse wheel to adjust values.
+- **Open Sub-Ring**: Left-click slices with sub-tiers (Active Apps, File Jump, Browser Tabs, Clipboard, Audio Output) to expand localized outer petals.
 - **Reorder Slices**: Left-click and hold a slice, drag it to the desired position, and release.
 - **Configure Slice**: Right-click any slice to open the action customizer.
 - **Add / Remove Slices**: In the customizer, use + to append a new slice or - to remove an active one.

@@ -65,8 +65,26 @@ Item {
     property real outerHoverFactor: 0.0
     property real subRevealProgress: 0.0
 
+    // Drag-to-Reorder Slice State
+    property bool isDraggingSlice: false
+    property bool wasDraggingSlice: false
+    property int dragFromIndex: -1
+    property int dragTargetIndex: -1
+    property real dragStartX: 0
+    property real dragStartY: 0
+    property real dragCurrentMouseX: 0
+    property real dragCurrentMouseY: 0
+
     // Dynamic Active Hover Label for Center Hub
     readonly property string activeHoverLabel: {
+        if (root.isDraggingSlice && root.dragFromIndex >= 0 && root.dragTargetIndex >= 0) {
+            const fromLabel = (root.currentSlices && root.currentSlices[root.dragFromIndex]) ? root.currentSlices[root.dragFromIndex].label : "Slice"
+            if (root.dragFromIndex === root.dragTargetIndex) {
+                return "Moving " + fromLabel
+            } else {
+                return "Move " + fromLabel + " → Slot " + (root.dragTargetIndex + 1) + " (Key " + (root.dragTargetIndex + 1) + ")"
+            }
+        }
         if (outerHoveredIndex >= 0 && subSlices && subSlices[outerHoveredIndex]) {
             return subSlices[outerHoveredIndex].label || ""
         }
@@ -415,6 +433,15 @@ Item {
 
     Keys.onPressed: (event) => {
         if (event.key === Qt.Key_Escape) {
+            if (root.isDraggingSlice) {
+                root.isDraggingSlice = false
+                root.wasDraggingSlice = false
+                root.dragFromIndex = -1
+                root.dragTargetIndex = -1
+                pieCanvas.requestPaint()
+                event.accepted = true
+                return
+            }
             if (customizer.active) {
                 customizer.close()
                 event.accepted = true
@@ -461,6 +488,14 @@ Item {
         property int _outerHov: root.outerHoveredIndex
         property real _outerHovFactor: root.outerHoverFactor
         property int _parentIdx: root.parentSliceIndex
+
+        property bool _isDragging: root.isDraggingSlice
+        property int _dragFrom: root.dragFromIndex
+        property int _dragTarget: root.dragTargetIndex
+
+        on_IsDraggingChanged: requestPaint()
+        on_DragFromChanged: requestPaint()
+        on_DragTargetChanged: requestPaint()
 
         on_HovChanged: requestPaint()
         on_HovFactorChanged: requestPaint()
@@ -632,13 +667,37 @@ Item {
                 const startRad = startDeg * Math.PI / 180
                 const endRad = endDeg * Math.PI / 180
 
-                const isHov = (i === root.hoveredIndex)
+                const isHov = (i === root.hoveredIndex && !root.isDraggingSlice)
                 const isParentOfSub = (i === root.parentSliceIndex && root.activeSubTier !== "")
+                const isDragSrc = (root.isDraggingSlice && i === root.dragFromIndex)
+                const isDragDst = (root.isDraggingSlice && i === root.dragTargetIndex)
 
                 // Build uniform parallel gap floating wedge
                 drawFloatingWedge(ctx, cx, cy, root.sliceInnerRadius, currentOuter, startRad, endRad, cr)
 
-                if (isHov || isParentOfSub) {
+                if (isDragDst) {
+                    // Prominent glowing drop target wedge
+                    const grad = ctx.createRadialGradient(
+                        cx, cy, root.sliceInnerRadius - 10,
+                        cx, cy, currentOuter + 10
+                    )
+                    grad.addColorStop(0.0, Qt.lighter(root.colPrimary, 1.45))
+                    grad.addColorStop(0.35, root.colPrimary)
+                    grad.addColorStop(1.0, Qt.darker(root.colPrimary, 1.15))
+
+                    ctx.fillStyle = grad
+                    ctx.fill()
+                    ctx.strokeStyle = Qt.lighter(root.colPrimary, 1.35)
+                    ctx.lineWidth = 2.4
+                    ctx.stroke()
+                } else if (isDragSrc) {
+                    // Dimmed source placeholder wedge
+                    ctx.fillStyle = Qt.rgba(0.06, 0.06, 0.08, 0.25)
+                    ctx.fill()
+                    ctx.strokeStyle = Qt.rgba(1.0, 1.0, 1.0, 0.22)
+                    ctx.lineWidth = 1.2
+                    ctx.stroke()
+                } else if (isHov || isParentOfSub) {
                     // Soft radial gradient highlight pointing toward center
                     const grad = ctx.createRadialGradient(
                         cx, cy, root.sliceInnerRadius - 10,
@@ -739,7 +798,68 @@ Item {
         hoverEnabled: true
         acceptedButtons: Qt.LeftButton | Qt.RightButton
 
+        onPressed: (mouse) => {
+            if (mouse.button === Qt.LeftButton) {
+                root.dragStartX = mouse.x
+                root.dragStartY = mouse.y
+                root.dragCurrentMouseX = mouse.x
+                root.dragCurrentMouseY = mouse.y
+                root.dragFromIndex = root.hoveredIndex
+                root.dragTargetIndex = root.hoveredIndex
+                root.isDraggingSlice = false
+                root.wasDraggingSlice = false
+            }
+        }
+
+        onReleased: (mouse) => {
+            if (mouse.button === Qt.LeftButton) {
+                if (root.isDraggingSlice) {
+                    const fromIdx = root.dragFromIndex
+                    const toIdx = root.dragTargetIndex
+                    root.isDraggingSlice = false
+
+                    if (fromIdx >= 0 && toIdx >= 0 && fromIdx !== toIdx) {
+                        RadialMenuActions.reorderSlice(root.activeContext, fromIdx, toIdx)
+                    }
+
+                    root.dragFromIndex = -1
+                    root.dragTargetIndex = -1
+                    pieCanvas.requestPaint()
+                    return
+                }
+                root.dragFromIndex = -1
+                root.dragTargetIndex = -1
+            }
+        }
+
         onPositionChanged: (mouse) => {
+            root.dragCurrentMouseX = mouse.x
+            root.dragCurrentMouseY = mouse.y
+
+            // Handle Drag-to-Reorder when left button is held
+            if ((mouse.buttons & Qt.LeftButton) && root.dragFromIndex >= 0 && root.dragFromIndex < root.sliceCount) {
+                const moveDist = Math.hypot(mouse.x - root.dragStartX, mouse.y - root.dragStartY)
+                if (!root.isDraggingSlice && moveDist > 10) {
+                    root.isDraggingSlice = true
+                    root.wasDraggingSlice = true
+                    if (root.activeSubTier !== "") {
+                        root.updateSubTier("", -1)
+                    }
+                }
+
+                if (root.isDraggingSlice) {
+                    const dx = mouse.x - root.cx
+                    const dy = mouse.y - root.cy
+                    const rawAngle = Math.atan2(dy, dx) * 180.0 / Math.PI
+                    const clockAngle = root.normalizeDeg(rawAngle + 90.0)
+                    const targetSlot = Math.floor(clockAngle / root.sliceAngle) % root.sliceCount
+                    if (targetSlot !== root.dragTargetIndex) {
+                        root.dragTargetIndex = targetSlot
+                    }
+                    pieCanvas.requestPaint()
+                    return
+                }
+            }
             const dx = mouse.x - root.cx
             const dy = mouse.y - root.cy
             const dist = Math.sqrt(dx * dx + dy * dy)
@@ -800,6 +920,10 @@ Item {
         }
 
         onClicked: (mouse) => {
+            if (root.wasDraggingSlice) {
+                root.wasDraggingSlice = false
+                return
+            }
             if (mouse.button === Qt.RightButton) {
                 if (customizer.active) {
                     customizer.close()
@@ -888,6 +1012,58 @@ Item {
         }
     }
 
+    // ── Floating Dragged Segment Ghost Follower ──────────────────────────────
+    Item {
+        id: dragGhost
+        visible: root.isDraggingSlice && root.dragFromIndex >= 0
+        width: 52
+        height: 52
+        x: Math.round(root.dragCurrentMouseX - width / 2)
+        y: Math.round(root.dragCurrentMouseY - height / 2)
+        z: 60
+
+        readonly property var dragSliceData: (root.currentSlices && root.dragFromIndex >= 0 && root.dragFromIndex < root.sliceCount)
+            ? root.currentSlices[root.dragFromIndex]
+            : null
+
+        Rectangle {
+            anchors.fill: parent
+            radius: 26
+            color: Qt.rgba(0.08, 0.08, 0.12, 0.90)
+            border.color: root.colPrimary
+            border.width: 2.0
+            scale: 1.15
+
+            MaterialSymbol {
+                anchors.centerIn: parent
+                text: dragGhost.dragSliceData ? dragGhost.dragSliceData.icon : ""
+                iconSize: 28
+                color: root.colPrimary
+            }
+
+            // Target Slot Number Badge
+            Rectangle {
+                width: 18
+                height: 18
+                radius: 9
+                anchors.top: parent.top
+                anchors.right: parent.right
+                anchors.topMargin: -4
+                anchors.rightMargin: -4
+                color: root.colPrimary
+
+                Text {
+                    anchors.centerIn: parent
+                    text: (root.dragTargetIndex >= 0 ? (root.dragTargetIndex + 1) : (root.dragFromIndex + 1))
+                    font.pixelSize: 10
+                    font.weight: Font.Bold
+                    font.family: root.fontMain
+                    color: root.colOnPrimary
+                }
+            }
+        }
+    }
+
     // ── 1. Main Ring Icons Overlay ───────────────────────────────────────────
     Repeater {
         model: root.sliceCount
@@ -913,13 +1089,19 @@ Item {
             readonly property bool isParentOfSub: (sliceOverlay.index === root.parentSliceIndex && root.activeSubTier !== "")
             readonly property var sliceData: root.currentSlices && root.currentSlices[sliceOverlay.index] ? root.currentSlices[sliceOverlay.index] : null
 
+            readonly property bool isBeingDragged: root.isDraggingSlice && (sliceOverlay.index === root.dragFromIndex)
+            readonly property bool isDropTarget: root.isDraggingSlice && (sliceOverlay.index === root.dragTargetIndex)
+
             // Staggered reveal progress
             readonly property real sliceProgress: Math.min(Math.max(root.revealProgress - sliceOverlay.index, 0.0), 1.0)
             readonly property real sliceScale: (sliceProgress >= 1.0) ? 1.0 : (1.0 - Math.pow(1.0 - sliceProgress, 3))
 
             visible: sliceProgress > 0.0
-            opacity: sliceProgress
-            scale: sliceScale
+            opacity: isBeingDragged ? 0.35 : sliceProgress
+            scale: isDropTarget ? 1.18 : (isBeingDragged ? 0.9 : sliceScale)
+
+            Behavior on scale { NumberAnimation { duration: 100 } }
+            Behavior on opacity { NumberAnimation { duration: 100 } }
 
             width: 44
             height: 44
@@ -948,6 +1130,42 @@ Item {
                 }
                 Behavior on color { ColorAnimation { duration: 90 } }
                 Behavior on fill { NumberAnimation { duration: 90 } }
+            }
+            // Hotkey Number Badge (1..9)
+            Rectangle {
+                id: numBadge
+                width: 15
+                height: 15
+                radius: 7.5
+                anchors.top: parent.top
+                anchors.right: parent.right
+                anchors.topMargin: -3
+                anchors.rightMargin: -3
+                z: 10
+
+                visible: (sliceOverlay.index < 9)
+
+                color: (sliceOverlay.isHovered || sliceOverlay.isParentOfSub || sliceOverlay.isDropTarget)
+                    ? root.colOnPrimary
+                    : Qt.rgba(0.04, 0.04, 0.06, 0.70)
+                border.color: (sliceOverlay.isHovered || sliceOverlay.isParentOfSub || sliceOverlay.isDropTarget)
+                    ? root.colPrimary
+                    : Qt.rgba(1.0, 1.0, 1.0, 0.28)
+                border.width: 1
+
+                Text {
+                    anchors.centerIn: parent
+                    text: (sliceOverlay.index + 1)
+                    font.pixelSize: 9
+                    font.weight: Font.Bold
+                    font.family: root.fontMain
+                    color: (sliceOverlay.isHovered || sliceOverlay.isParentOfSub || sliceOverlay.isDropTarget)
+                        ? root.colPrimary
+                        : Qt.rgba(1.0, 1.0, 1.0, 0.85)
+                }
+
+                Behavior on color { ColorAnimation { duration: 80 } }
+                Behavior on border.color { ColorAnimation { duration: 80 } }
             }
         }
     }

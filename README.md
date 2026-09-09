@@ -12,6 +12,8 @@
   - **Dynamic Slice Management (`+` Add / `-` Remove)**: Add new functions or remove existing slices from the active dial with a single click.
   - **Customizable File Jump**: Right-click on any File Jump target to edit its label, path, and icon, or click the `+` petal to add new destinations with a native directory picker and automatic drive mounting support.
   - **Persistent User Configuration**: All changes are automatically saved atomically to `~/.config/radialMenu/config.json`.
+- 🔄 **Drag-to-Reorder Layout**: Left-click and drag any slice around the dial to reorder the menu layout dynamically. Slices highlight glowing drop targets with live preview badges and floating ghost icons.
+- 🔢 **Dynamic Number Hotkey Badges (1..9)**: Visual numbered badges directly map keyboard shortcuts `1` through `9` to slices. As you reorder or add/remove petals, hotkeys automatically refresh and synchronize with their new positions.
 - 🧩 **Universal Quickshell Compatibility**: Fully compatible with both **end4-pC** dotfiles and **standard standalone Quickshell** setups without missing module errors. Includes self-contained fallback widgets, dynamic cursor resolution, and native shortcuts.
 - 🎯 **Context-Aware Dynamic Menus**: Automatically identifies the active window underneath the cursor and adapts the dial:
   - **Browser Context (Firefox, Zen, Chrome, etc.)**: 
@@ -53,6 +55,8 @@ Once installed, press **`Super + Tab`** anywhere on your desktop or over any win
 - **Search & Filter**: Search through the 26+ built-in actions or filter by category (`Apps`, `Tools`, `Media`, `Capture`, `Window`, `System`).
 - **Add / Remove Petals**: Use the `+` button in the edit menu to append a new slice to the current dial, or `-` to remove an active slice.
 - **File Jump Customization**: Click the `+` petal on the File Jump ring or right-click any existing folder target to configure the destination path using the built-in file picker. Auto-mounts external drives if unmounted.
+- **Drag-to-Reorder**: Click and hold any slice, then drag it around the dial to reorder positions. Hovering over another slice previews the drop slot, and releasing applies the new layout instantly.
+- **Dynamic Number Hotkeys (1..9)**: Each wedge shows its corresponding number hotkey badge. Hotkeys follow the rearranged slices automatically, so pressing `1`..`9` always triggers whatever is at that slot.
 - **Persistence**: Configuration is stored in `~/.config/radialMenu/config.json`. To reset to default, simply delete this file.
 
 ---

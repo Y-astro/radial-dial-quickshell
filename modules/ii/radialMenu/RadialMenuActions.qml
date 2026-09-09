@@ -700,6 +700,26 @@ except Exception:
         saveConfig(cfg)
     }
 
+    // Reorder slice from fromIndex to toIndex on the current wheel
+    function reorderSlice(context: string, fromIndex: int, toIndex: int) {
+        if (fromIndex === toIndex || fromIndex < 0 || toIndex < 0) return
+
+        const cfg = JSON.parse(JSON.stringify(root.userConfig))
+        let key = "globalSlices"
+        if (context === "kitty") key = "kittySlices"
+        else if (context === "browser") key = "browserSlices"
+
+        if (!Array.isArray(cfg[key])) {
+            cfg[key] = getActiveSliceIds(context).slice()
+        }
+
+        if (fromIndex < cfg[key].length && toIndex < cfg[key].length) {
+            const item = cfg[key].splice(fromIndex, 1)[0]
+            cfg[key].splice(toIndex, 0, item)
+            saveConfig(cfg)
+        }
+    }
+
     // Add a new target to File Jump
     function addFileJumpTarget(label: string, path: string, icon: string) {
         const cfg = JSON.parse(JSON.stringify(root.userConfig))

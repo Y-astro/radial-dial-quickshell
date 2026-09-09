@@ -6,6 +6,13 @@
 
 ## ✨ Features
 
+- 🎨 **In-Menu Interactive Customizer**: **Right-click** on any slice to open the in-menu customizer modal:
+  - **Live Function Catalogue**: Browse 26+ built-in actions across Apps, Tools, Media Controls, Screen Capture, Window Management, and System Session.
+  - **Active State Indicators (`✓ Active`)**: Instantly see which functions are currently mapped to the active dial.
+  - **Dynamic Slice Management (`+` Add / `-` Remove)**: Add new functions or remove existing slices from the active dial with a single click.
+  - **Customizable File Jump**: Right-click on any File Jump target to edit its label, path, and icon, or click the `+` petal to add new destinations with a native directory picker and automatic drive mounting support.
+  - **Persistent User Configuration**: All changes are automatically saved atomically to `~/.config/radialMenu/config.json`.
+- 🧩 **Universal Quickshell Compatibility**: Fully compatible with both **end4-pC** dotfiles and **standard standalone Quickshell** setups without missing module errors. Includes self-contained fallback widgets, dynamic cursor resolution, and native shortcuts.
 - 🎯 **Context-Aware Dynamic Menus**: Automatically identifies the active window underneath the cursor and adapts the dial:
   - **Browser Context (Firefox, Zen, Chrome, etc.)**: 
     - ⚡ **Real-Time Tab Switcher**: Sub-radial ring displaying all currently open browser tabs with full webpage titles on hover and instant `Alt+1..9` tab switching.
@@ -33,8 +40,20 @@ chmod +x install.sh
 ./install.sh
 ```
 
+The installer automatically detects whether you are using an `end4-pC` configuration or a standard standalone Quickshell setup and sets up the appropriate modules and shortcuts.
+
 ### Keybinding
 Once installed, press **`Super + Tab`** anywhere on your desktop or over any window to open the radial dial.
+
+---
+
+## 🎨 Interactive Customization & Slices
+
+- **Right-Click Any Slice**: Opens the function picker modal to swap the function on that wedge.
+- **Search & Filter**: Search through the 26+ built-in actions or filter by category (`Apps`, `Tools`, `Media`, `Capture`, `Window`, `System`).
+- **Add / Remove Petals**: Use the `+` button in the edit menu to append a new slice to the current dial, or `-` to remove an active slice.
+- **File Jump Customization**: Click the `+` petal on the File Jump ring or right-click any existing folder target to configure the destination path using the built-in file picker. Auto-mounts external drives if unmounted.
+- **Persistence**: Configuration is stored in `~/.config/radialMenu/config.json`. To reset to default, simply delete this file.
 
 ---
 

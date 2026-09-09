@@ -46,8 +46,8 @@ echo -e "${GREEN}[✓] radialMenu module copied.${RESET}"
 echo -e "${BLUE}[*] Installing Native Messaging host for browser tab sync...${RESET}"
 mkdir -p "$HOME/.mozilla/native-messaging-hosts"
 mkdir -p "$HOME/.config/mozilla/native-messaging-hosts"
-cp "$QS_DIR/modules/ii/radialMenu/extension/radial_tabs.json" "$HOME/.mozilla/native-messaging-hosts/" 2>/dev/null || true
-cp "$QS_DIR/modules/ii/radialMenu/extension/radial_tabs.json" "$HOME/.config/mozilla/native-messaging-hosts/" 2>/dev/null || true
+sed "s|PLACEHOLDER_PATH|$QS_DIR/modules/ii/radialMenu/extension|g" "$QS_DIR/modules/ii/radialMenu/extension/radial_tabs.json" > "$HOME/.mozilla/native-messaging-hosts/radial_tabs.json" 2>/dev/null || true
+sed "s|PLACEHOLDER_PATH|$QS_DIR/modules/ii/radialMenu/extension|g" "$QS_DIR/modules/ii/radialMenu/extension/radial_tabs.json" > "$HOME/.config/mozilla/native-messaging-hosts/radial_tabs.json" 2>/dev/null || true
 echo -e "${GREEN}[✓] Native Messaging host registered.${RESET}"
 
 # 4. Patch GlobalStates.qml

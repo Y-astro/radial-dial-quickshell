@@ -2,12 +2,6 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Layouts
 import Quickshell
-import qs
-import qs.services
-import qs.modules.common
-import qs.modules.common.widgets
-import qs.modules.common.functions
-import qs.modules.ii.radialMenu
 
 // ─────────────────────────────────────────────────────────────────────────────
 // RadialMenuContent — Localized Symmetrical Petal Fan Radial Menu
@@ -18,11 +12,21 @@ Item {
     required property real centerX
     required property real centerY
 
+    // Universal theme fallbacks (compatible with any Quickshell environment)
+    readonly property color colPrimary: (typeof Appearance !== "undefined" && Appearance.colors) ? Appearance.colors.colPrimary : Qt.rgba(0.66, 0.78, 0.98, 1.0)
+    readonly property color colOnPrimary: (typeof Appearance !== "undefined" && Appearance.colors) ? Appearance.colors.colOnPrimary : Qt.rgba(0.02, 0.18, 0.44, 1.0)
+    readonly property color colOnSurface: (typeof Appearance !== "undefined" && Appearance.colors) ? Appearance.colors.colOnSurface : Qt.rgba(0.90, 0.90, 0.93, 1.0)
+    readonly property color colSubtext: (typeof Appearance !== "undefined" && Appearance.colors && Appearance.colors.colSubtext) ? Appearance.colors.colSubtext : Qt.rgba(0.70, 0.70, 0.75, 0.8)
+    readonly property string fontMain: (typeof Appearance !== "undefined" && Appearance.font) ? Appearance.font.family.main : "sans-serif"
+    readonly property string fontIcon: (typeof Appearance !== "undefined" && Appearance.font) ? Appearance.font.family.iconMaterial : "Material Symbols Rounded"
+
+    property var contextWindow: (typeof GlobalStates !== "undefined" && GlobalStates) ? GlobalStates.radialMenuContextWindow : null
+
     focus: true
 
     // Context & Main Slices
-    property string activeContext: RadialMenuActions.resolveContext(GlobalStates.radialMenuContextWindow)
-    property var currentSlices: RadialMenuActions.getSlicesFor("main", activeContext, GlobalStates.radialMenuContextWindow)
+    property string activeContext: RadialMenuActions.resolveContext(root.contextWindow)
+    property var currentSlices: RadialMenuActions.getSlicesFor("main", activeContext, root.contextWindow)
 
     // Localized Concentric Outer Sub-Ring State (Opened on Click)
     property string activeSubTier: ""
@@ -91,7 +95,7 @@ Item {
             subCollapseAnim.stop()
             activeSubTier = tierName
             parentSliceIndex = parentIdx
-            const items = RadialMenuActions.getSlicesFor(tierName, activeContext, GlobalStates.radialMenuContextWindow)
+            const items = RadialMenuActions.getSlicesFor(tierName, activeContext, root.contextWindow)
             subSlices = (items && items.length > 0) ? items : []
             outerHoveredIndex = -1
             subRevealAnim.to = Math.max(1, subSlices.length)
@@ -272,9 +276,9 @@ Item {
             opacity = 1.0
             hoveredIndex = -1
             centerHovered = false
-            activeContext = RadialMenuActions.resolveContext(GlobalStates.radialMenuContextWindow)
+            activeContext = RadialMenuActions.resolveContext(root.contextWindow)
             if (activeContext === "browser") {
-                GlobalStates.refreshTabs()
+                if (typeof GlobalStates !== "undefined" && typeof GlobalStates.refreshTabs === "function") GlobalStates.refreshTabs()
             }
             restartBlossom()
         } else {
@@ -289,7 +293,7 @@ Item {
         opacity = 1.0
         forceActiveFocus()
         if (activeContext === "browser") {
-            GlobalStates.refreshTabs()
+            if (typeof GlobalStates !== "undefined" && typeof GlobalStates.refreshTabs === "function") GlobalStates.refreshTabs()
         }
         restartBlossom()
     }
@@ -345,7 +349,7 @@ Item {
 
         ScriptAction {
             script: {
-                GlobalStates.radialMenuOpen = false
+                if (typeof GlobalStates !== "undefined") GlobalStates.radialMenuOpen = false
                 if (typeof root.pendingAction === "function") {
                     const act = root.pendingAction
                     root.pendingAction = null
@@ -411,8 +415,18 @@ Item {
 
     Keys.onPressed: (event) => {
         if (event.key === Qt.Key_Escape) {
+            if (customizer.active) {
+                customizer.close()
+                event.accepted = true
+                return
+            }
             handleEscape()
             event.accepted = true
+            return
+        }
+
+        if (customizer.active) {
+            // Ignore dial number shortcuts when customizer is active
             return
         }
 
@@ -440,7 +454,7 @@ Item {
         property int _hov: root.hoveredIndex
         property real _hovFactor: root.hoverFactor
         property real _rev: root.revealProgress
-        property color _primary: Appearance.colors.colPrimary
+        property color _primary: root.colPrimary
 
         property string _subTier: root.activeSubTier
         property real _subRev: root.subRevealProgress
@@ -630,13 +644,13 @@ Item {
                         cx, cy, root.sliceInnerRadius - 10,
                         cx, cy, currentOuter + 10
                     )
-                    grad.addColorStop(0.0, Qt.lighter(Appearance.colors.colPrimary, 1.35))
-                    grad.addColorStop(0.35, Appearance.colors.colPrimary)
-                    grad.addColorStop(1.0, Qt.darker(Appearance.colors.colPrimary, 1.15))
+                    grad.addColorStop(0.0, Qt.lighter(root.colPrimary, 1.35))
+                    grad.addColorStop(0.35, root.colPrimary)
+                    grad.addColorStop(1.0, Qt.darker(root.colPrimary, 1.15))
 
                     ctx.fillStyle = grad
                     ctx.fill()
-                    ctx.strokeStyle = Qt.lighter(Appearance.colors.colPrimary, 1.25)
+                    ctx.strokeStyle = Qt.lighter(root.colPrimary, 1.25)
                     ctx.lineWidth = 1.6
                     ctx.stroke()
                 } else {
@@ -688,13 +702,13 @@ Item {
                             cx, cy, root.subInnerRadius - 5,
                             cx, cy, currentSubOuter + 10
                         )
-                        grad.addColorStop(0.0, Qt.lighter(Appearance.colors.colPrimary, 1.30))
-                        grad.addColorStop(0.40, Appearance.colors.colPrimary)
-                        grad.addColorStop(1.0, Qt.darker(Appearance.colors.colPrimary, 1.10))
+                        grad.addColorStop(0.0, Qt.lighter(root.colPrimary, 1.30))
+                        grad.addColorStop(0.40, root.colPrimary)
+                        grad.addColorStop(1.0, Qt.darker(root.colPrimary, 1.10))
 
                         ctx.fillStyle = grad
                         ctx.fill()
-                        ctx.strokeStyle = Qt.lighter(Appearance.colors.colPrimary, 1.30)
+                        ctx.strokeStyle = Qt.lighter(root.colPrimary, 1.30)
                         ctx.lineWidth = 1.8
                         ctx.stroke()
                     } else {
@@ -787,6 +801,34 @@ Item {
 
         onClicked: (mouse) => {
             if (mouse.button === Qt.RightButton) {
+                if (customizer.active) {
+                    customizer.close()
+                    return
+                }
+
+                // Sub-tier outer ring right-click (File Jump targets)
+                if (root.activeSubTier === "filejump" && root.outerHoveredIndex >= 0 && root.outerHoveredIndex < root.subSliceCount) {
+                    const subItem = root.subSlices[root.outerHoveredIndex]
+                    if (subItem) {
+                        if (subItem.isAddButton) {
+                            customizer.openAddFileTarget()
+                        } else {
+                            customizer.openEditFileTarget(subItem.targetIndex, subItem.label, subItem.targetPath, subItem.icon)
+                        }
+                        return
+                    }
+                }
+
+                // Main dial inner ring right-click (Swap function)
+                if (root.hoveredIndex >= 0 && root.hoveredIndex < root.sliceCount) {
+                    const mainItem = root.currentSlices[root.hoveredIndex]
+                    if (mainItem) {
+                        customizer.openSwapFunction(root.activeContext, root.hoveredIndex, mainItem.functionId || "")
+                        return
+                    }
+                }
+
+                // Empty space right click -> close
                 root.handleEscape()
                 return
             }
@@ -819,8 +861,14 @@ Item {
                 if (relAngle <= root.subTotalSpan) {
                     const clickIdx = Math.min(root.subSliceCount - 1, Math.floor(relAngle / root.subSliceWidth))
                     const subSlice = root.subSlices[clickIdx]
-                    if (subSlice && typeof subSlice.action === "function") {
-                        root.closeAnimated(subSlice.action)
+                    if (subSlice) {
+                        if (subSlice.isAddButton) {
+                            customizer.openAddFileTarget()
+                            return
+                        }
+                        if (typeof subSlice.action === "function") {
+                            root.closeAnimated(subSlice.action)
+                        }
                     }
                 }
                 return
@@ -888,7 +936,7 @@ Item {
                 iconSize: (sliceOverlay.isHovered || sliceOverlay.isParentOfSub) ? 30 : 25
                 fill: (sliceOverlay.isHovered || sliceOverlay.isParentOfSub) ? 1 : 0
                 color: (sliceOverlay.isHovered || sliceOverlay.isParentOfSub)
-                    ? Appearance.colors.colOnPrimary
+                    ? root.colOnPrimary
                     : Qt.rgba(1.0, 1.0, 1.0, 0.95)
 
                 Behavior on iconSize {
@@ -948,7 +996,7 @@ Item {
                 iconSize: outerSliceOverlay.isOuterHovered ? 26 : 22
                 fill: outerSliceOverlay.isOuterHovered ? 1 : 0
                 color: outerSliceOverlay.isOuterHovered
-                    ? Appearance.colors.colOnPrimary
+                    ? root.colOnPrimary
                     : Qt.rgba(1.0, 1.0, 1.0, 0.95)
 
                 Behavior on iconSize {
@@ -977,7 +1025,7 @@ Item {
                 ? Qt.rgba(0.08, 0.08, 0.12, 0.65)
                 : Qt.rgba(0.06, 0.06, 0.08, 0.45))
         border.color: root.activeHoverLabel !== ""
-            ? Qt.lighter(Appearance.colors.colPrimary, 1.25)
+            ? Qt.lighter(root.colPrimary, 1.25)
             : Qt.rgba(1.0, 1.0, 1.0, 0.22)
         border.width: root.activeHoverLabel !== "" ? 1.8 : 1.5
 
@@ -1004,17 +1052,35 @@ Item {
             anchors.centerIn: parent
             width: parent.width - 12
             text: root.activeHoverLabel
-            font.pixelSize: Appearance.font.pixelSize.small
+            font.pixelSize: ((typeof Appearance !== 'undefined' && Appearance.font && Appearance.font.pixelSize) ? Appearance.font.pixelSize.small : 13)
             font.weight: Font.DemiBold
             horizontalAlignment: Text.AlignHCenter
             verticalAlignment: Text.AlignVCenter
             wrapMode: Text.WordWrap
             maximumLineCount: 2
             elide: Text.ElideRight
-            color: Appearance.colors.colPrimary
+            color: root.colPrimary
             visible: root.activeHoverLabel !== ""
             opacity: root.activeHoverLabel !== "" ? 1.0 : 0.0
             Behavior on opacity { NumberAnimation { duration: 80 } }
         }
+    }
+
+    // ── 5. Configuration Synchronization ────────────────────────────────────
+    Connections {
+        target: RadialMenuActions
+        function onConfigChanged() {
+            root.currentSlices = RadialMenuActions.getSlicesFor("main", root.activeContext, root.contextWindow)
+            if (root.activeSubTier !== "") {
+                root.subSlices = RadialMenuActions.getSlicesFor(root.activeSubTier, root.activeContext, root.contextWindow)
+            }
+            pieCanvas.requestPaint()
+        }
+    }
+
+    // ── 6. In-Menu Function Swap & File Target Customizer Modal ──────────────
+    RadialMenuCustomizer {
+        id: customizer
+        z: 100
     }
 }

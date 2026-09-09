@@ -1,9 +1,10 @@
 {
   "name": "radial_tabs",
-  "description": "Radial Dial Real-Time Tab Synchronizer",
-  "path": "/home/astro/.config/quickshell/end4-pC/modules/ii/radialMenu/extension/native_host.py",
+  "description": "Real-time Native Messaging host for Hyprland Radial Menu",
+  "path": "PLACEHOLDER_PATH/native_host.py",
   "type": "stdio",
   "allowed_extensions": [
-    "radial-tabs@y-astro.github.io"
+    "radial-tabs@hyprland.desktop",
+    "radial-tabs@local"
   ]
 }

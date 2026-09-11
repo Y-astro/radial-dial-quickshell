@@ -12,6 +12,7 @@ Item {
 
     required property real centerX
     required property real centerY
+    required property bool highPowerMode
 
     // Universal theme fallbacks (compatible with any Quickshell environment)
     readonly property color colPrimary: (typeof Appearance !== "undefined" && Appearance.colors) ? Appearance.colors.colPrimary : Qt.rgba(0.66, 0.78, 0.98, 1.0)
@@ -21,7 +22,7 @@ Item {
     readonly property string fontMain: (typeof Appearance !== "undefined" && Appearance.font) ? Appearance.font.family.main : "sans-serif"
     readonly property string fontIcon: (typeof Appearance !== "undefined" && Appearance.font) ? Appearance.font.family.iconMaterial : "Material Symbols Rounded"
 
-    property var contextWindow: (typeof GlobalStates !== "undefined" && GlobalStates) ? GlobalStates.radialMenuContextWindow : null
+    property var contextWindow: null
 
     signal menuClosed()
     readonly property bool isClosing: collapseAnimation.running
@@ -309,7 +310,7 @@ Item {
             centerHovered = false
             activeContext = RadialMenuActions.resolveContext(root.contextWindow)
             if (activeContext === "browser") {
-                if (typeof GlobalStates !== "undefined" && typeof GlobalStates.refreshTabs === "function") GlobalStates.refreshTabs()
+                RadialMenuActions.refreshBrowserTabs()
             }
             restartBlossom()
         } else {
@@ -324,7 +325,7 @@ Item {
         opacity = 1.0
         forceActiveFocus()
         if (activeContext === "browser") {
-            if (typeof GlobalStates !== "undefined" && typeof GlobalStates.refreshTabs === "function") GlobalStates.refreshTabs()
+            RadialMenuActions.refreshBrowserTabs()
         }
         restartBlossom()
     }
@@ -379,14 +380,11 @@ Item {
 
         ScriptAction {
             script: {
-                root.menuClosed()
-                if (typeof GlobalStates !== "undefined" && GlobalStates) {
-                    GlobalStates.radialMenuOpen = false
-                }
                 root.flickModeArmed = false
-                if (typeof root.pendingAction === "function") {
-                    const act = root.pendingAction
-                    root.pendingAction = null
+                const act = root.pendingAction
+                root.pendingAction = null
+                root.menuClosed()
+                if (typeof act === "function") {
                     act()
                 }
             }
@@ -536,11 +534,13 @@ Item {
         visible: opacity > 0.001
         Behavior on opacity { NumberAnimation { duration: 160; easing.type: Easing.OutCubic } }
 
-        // ── Canvas: GPU-Accelerated Concentric Floating Wedges ────────────────────
+        // Dedicated GPUs use the direct framebuffer path. Integrated/unknown
+        // graphics use a threaded image target to keep compositor load low.
         Canvas {
             id: pieCanvas
         anchors.fill: parent
-        renderTarget: Canvas.FramebufferObject
+        renderTarget: root.highPowerMode ? Canvas.FramebufferObject : Canvas.Image
+        renderStrategy: root.highPowerMode ? Canvas.Immediate : Canvas.Threaded
 
         property int _hov: root.hoveredIndex
         property real _hovFactor: root.hoverFactor

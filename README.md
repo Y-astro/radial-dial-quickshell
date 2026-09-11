@@ -1,6 +1,6 @@
 # Radial Dial for Quickshell
 
-A GPU-accelerated, context-aware radial dial menu for Quickshell and Hyprland.
+A context-aware radial dial menu for Quickshell and Hyprland with automatic GPU-aware rendering.
 
 ---
 
@@ -34,7 +34,7 @@ A GPU-accelerated, context-aware radial dial menu for Quickshell and Hyprland.
   - Segmented floating wedges with 6px rounded corners and radial gaps.
   - Physics ripple effect expanding hovered slices by +7px and +6.4 degrees.
   - Spring-animated blossom entrance and outside-in exit animations.
-  - True compositor-level frosted glass blur on Hyprland.
+  - Optional compositor-level frosted glass blur on Hyprland.
 - **Scratchpad Routing**: Direct window routing to Hyprland's special workspace, with an 8-workspace destination ring to return scratchpad windows to specific workspaces.
 
 ---
@@ -50,7 +50,9 @@ chmod +x install.sh
 ./install.sh
 ```
 
-The installer detects your Quickshell configuration path, copies required modules, configures Hyprland layer rules, binds the shortcut, and registers the browser tab synchronization native messaging host.
+The installer detects your Quickshell configuration path, copies the module, binds the shortcut, and registers the browser tab synchronization native messaging host. The radial menu owns its own state and shortcut handler; it does not patch the host's `GlobalStates.qml`.
+
+Rendering mode is selected automatically. NVIDIA GPUs, Intel Arc GPUs, and AMD GPUs with at least 2 GiB of dedicated VRAM use the framebuffer renderer with compositor blur. Integrated or unknown graphics use the threaded image renderer without blur. This keeps the expensive fullscreen blur away from low-power systems while preserving the full visual mode on suitable hardware.
 
 ### Default Keybinding
 
@@ -92,7 +94,7 @@ To install manually into `~/.config/quickshell/end4-pC/`:
    chmod +x ~/.config/quickshell/end4-pC/modules/ii/radialMenu/*.py
    ```
 
-2. Add Hyprland layer rules in `~/.config/hypr/hyprland/rules.lua`:
+2. Optionally add Hyprland layer rules in `~/.config/hypr/hyprland/rules.lua` if you want compositor blur:
    ```lua
    hl.layer_rule({ match = { namespace = "quickshell:radialMenu" }, blur = true })
    hl.layer_rule({ match = { namespace = "quickshell:radialMenu" }, ignore_alpha = 0.15 })

@@ -23,6 +23,7 @@ Singleton {
     property var cachedClips: []
     property var cachedSinks: []
     property var cachedClients: []
+    property var cachedTabs: []
 
     Process {
         id: fetchClipsProc
@@ -60,11 +61,22 @@ Singleton {
     }
     function refreshClients() { fetchClientsProc.running = true }
 
+    Process {
+        id: fetchTabsProc
+        command: ["python3", root.ipcScriptPath, "tabs"]
+        running: false
+        stdout: StdioCollector {
+            onStreamFinished: {
+                try { root.cachedTabs = JSON.parse(text.trim()) } catch(e) {}
+            }
+        }
+    }
+    function refreshBrowserTabs() {
+        if (!fetchTabsProc.running) fetchTabsProc.running = true
+    }
+
     function focusWindow(addr, ws) {
         if (!addr) return
-        if (typeof GlobalStates !== "undefined" && GlobalStates) {
-            GlobalStates.radialMenuOpen = false
-        }
         let wsId = ""
         if (ws !== undefined && ws !== null && ws !== "") {
             wsId = String(typeof ws === "object" ? (ws.name || ws.id || "") : ws)
@@ -141,9 +153,6 @@ Singleton {
 
     // Send keystroke reliably to a target window
     function sendBrowserKey(winAddress, keyCmd, wsId) {
-        if (typeof GlobalStates !== "undefined" && GlobalStates) {
-            GlobalStates.radialMenuOpen = false
-        }
         let focusCmd = ""
         if (wsId) {
             focusCmd += 'hyprctl dispatch \'hl.dsp.focus({ workspace = ' + (String(wsId).startsWith("special:") ? ('"' + wsId + '"') : wsId) + ' })\'; '
@@ -263,9 +272,6 @@ except Exception:
     except Exception:
         pass
 `
-        if (typeof GlobalStates !== "undefined" && GlobalStates) {
-            GlobalStates.radialMenuOpen = false
-        }
         Quickshell.execDetached(["python3", "-c", script])
     }
 
@@ -1139,11 +1145,7 @@ except Exception:
     // ── Active Apps Sub-Slice Generator (All Workspaces) ────────────────────
     function getActiveAppsSubSlices() {
         let clients = []
-        if (typeof GlobalStates !== "undefined" && GlobalStates && GlobalStates.activeClientsList && Array.isArray(GlobalStates.activeClientsList) && GlobalStates.activeClientsList.length > 0) {
-            clients = GlobalStates.activeClientsList
-        } else if (typeof HyprlandData !== "undefined" && HyprlandData.windowList && HyprlandData.windowList.length > 0) {
-            clients = HyprlandData.windowList
-        } else if (root.cachedClients && root.cachedClients.length > 0) {
+        if (root.cachedClients && root.cachedClients.length > 0) {
             clients = root.cachedClients
         } else {
             refreshClients()
@@ -1337,10 +1339,7 @@ except Exception:
             const wsId = (typeof wsVal === "object" && wsVal !== null)
                 ? String(wsVal.name || wsVal.id || "")
                 : String(wsVal || win?.workspaceId || "")
-            let rawTabs = []
-            if (typeof GlobalStates !== "undefined" && GlobalStates && GlobalStates.browserTabsList) {
-                rawTabs = GlobalStates.browserTabsList
-            }
+            const rawTabs = root.cachedTabs || []
             if (rawTabs && Array.isArray(rawTabs) && rawTabs.length > 0) {
                 return rawTabs.map((t, i) => {
                     const idx = t.index || (i + 1)
@@ -1416,10 +1415,7 @@ except Exception:
                 return sp
             }
             if (fnId === "browsertabs") {
-                let tabCount = 0
-                if (typeof GlobalStates !== "undefined" && GlobalStates && GlobalStates.browserTabsList) {
-                    tabCount = GlobalStates.browserTabsList.length
-                }
+                const tabCount = root.cachedTabs ? root.cachedTabs.length : 0
                 const tabSliceLabel = tabCount > 0 ? ('Switch Tab (' + tabCount + ')') : "Switch Tab"
                 return {
                     slotIndex: slotIdx,

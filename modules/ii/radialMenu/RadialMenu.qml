@@ -4,49 +4,57 @@ import Quickshell
 import Quickshell.Wayland
 import Quickshell.Hyprland
 import Quickshell.Io
-import qs.modules.common
 
 // ─────────────────────────────────────────────────────────────────────────────
 // RadialMenu — Transparent overlay window loader with active keyboard focus
-// Compatible with both end4-pC and standalone Quickshell configurations
+// Owns all menu state so host configurations do not need GlobalStates patches.
 // ─────────────────────────────────────────────────────────────────────────────
 Scope {
     id: root
 
-    // Standalone fallback properties when GlobalStates is not present
-    readonly property bool hasGlobalStates: typeof GlobalStates !== "undefined" && GlobalStates !== null
     property bool internalOpen: false
     property real internalX: 0
     property real internalY: 0
     property var  internalScreen: null
     property var  internalContextWin: ({})
-    property var  internalTabs: []
+    property bool highPowerMode: false
 
-    readonly property bool isMenuOpen: hasGlobalStates ? GlobalStates.radialMenuOpen : internalOpen
-    readonly property real posX: hasGlobalStates ? GlobalStates.radialMenuX : internalX
-    readonly property real posY: hasGlobalStates ? GlobalStates.radialMenuY : internalY
-    readonly property var  targetScreen: hasGlobalStates ? (GlobalStates.radialMenuScreen ?? Quickshell.screens[0]) : (internalScreen ?? Quickshell.screens[0])
+    readonly property bool isMenuOpen: internalOpen
+    readonly property real posX: internalX
+    readonly property real posY: internalY
+    readonly property var targetScreen: internalScreen ?? Quickshell.screens[0]
+    readonly property string ipcScriptPath: {
+        const url = Qt.resolvedUrl("hypr_ipc.py").toString()
+        return url.startsWith("file://") ? url.substring(7) : url
+    }
 
-    // Built-in GlobalShortcut for standalone Quickshell environments (disabled when GlobalStates is present)
-    Loader {
-        active: !root.hasGlobalStates
-        sourceComponent: GlobalShortcut {
-            name: "radialMenu"
-            description: "Open radial pie menu at cursor"
-            onPressed: {
-                if (root.isMenuOpen) {
-                    root.closeMenu()
-                    return
-                }
-                cursorReaderProc.running = true
-            }
+    Process {
+        id: renderModeDetector
+        command: ["python3", root.ipcScriptPath, "render_mode"]
+        running: true
+        stdout: StdioCollector {
+            onStreamFinished: root.highPowerMode = text.trim() === "gpu"
         }
     }
 
-    // Standalone cursor & active window reader
+    // Always register the shortcut here. The host only needs to dispatch
+    // quickshell:radialMenu; no host-side QML state or signal is required.
+    GlobalShortcut {
+        name: "radialMenu"
+        description: "Open radial pie menu at cursor"
+        onPressed: {
+            if (root.isMenuOpen) {
+                root.closeAnimated()
+                return
+            }
+            if (!cursorReaderProc.running) cursorReaderProc.running = true
+        }
+    }
+
+    // Fetch cursor, active-window, tabs, and clients in one short-lived process.
     Process {
         id: cursorReaderProc
-        command: ["bash", "-c", "WIN=$(hyprctl activewindow -j 2>/dev/null); [[ -z \"$WIN\" || \"$WIN\" == \"Invalid window\"* ]] && WIN=\"{}\"; TABS=$(python3 ~/.config/quickshell/modules/ii/radialMenu/get_browser_tabs.py 2>/dev/null || python3 ~/.config/quickshell/end4-pC/modules/ii/radialMenu/get_browser_tabs.py 2>/dev/null || echo \"[]\"); echo \"{\\\"cursor\\\": $(hyprctl cursorpos -j 2>/dev/null || echo '{\\\"x\\\":0,\\\"y\\\":0}'), \\\"window\\\": $WIN, \\\"tabs\\\": $TABS}\""]
+        command: ["python3", root.ipcScriptPath, "context"]
         running: false
         stdout: StdioCollector {
             onStreamFinished: {
@@ -67,23 +75,29 @@ Scope {
                         screen = Quickshell.screens.find(s => s.name === name) ?? Quickshell.screens[0]
                     }
                     root.internalContextWin = data.window || {}
-                    root.internalTabs = data.tabs || []
+                    RadialMenuActions.cachedTabs = data.tabs || []
+                    RadialMenuActions.cachedClients = data.clients || []
                     root.internalScreen = screen
                     root.internalX = pos.x - screen.x
                     root.internalY = pos.y - screen.y
                     root.internalOpen = true
                 } catch(e) {
-                    root.internalOpen = true
+                    console.warn("[RadialMenu] Could not read context:", e)
                 }
             }
         }
     }
 
     function closeMenu() {
-        if (root.hasGlobalStates) {
-            GlobalStates.radialMenuOpen = false
-        }
         root.internalOpen = false
+    }
+
+    function closeAnimated() {
+        if (menuLoader.item && typeof menuLoader.item.closeAnimated === "function") {
+            menuLoader.item.closeAnimated()
+        } else {
+            root.closeMenu()
+        }
     }
 
     Loader {
@@ -92,6 +106,10 @@ Scope {
 
         sourceComponent: PanelWindow {
             id: menuWin
+
+            function closeAnimated() {
+                radialContent.closeAnimated()
+            }
 
             screen: root.targetScreen
             color: "transparent"
@@ -109,13 +127,6 @@ Scope {
                 right: true
             }
 
-            Connections {
-                target: root.hasGlobalStates ? GlobalStates : null
-                function onRadialMenuCloseRequested() {
-                    radialContent.closeAnimated(() => root.closeMenu())
-                }
-            }
-
             // Click outside the dial closes the menu with outside-to-inside animation
             MouseArea {
                 anchors.fill: parent
@@ -126,7 +137,7 @@ Scope {
                         radialContent.closeCustomizer()
                         return
                     }
-                    radialContent.closeAnimated(() => root.closeMenu())
+                    menuWin.closeAnimated()
                 }
             }
 
@@ -134,7 +145,8 @@ Scope {
                 id: radialContent
                 centerX: root.posX
                 centerY: root.posY
-                contextWindow: root.hasGlobalStates ? GlobalStates.radialMenuContextWindow : root.internalContextWin
+                contextWindow: root.internalContextWin
+                highPowerMode: root.highPowerMode
                 focus: true
                 onMenuClosed: root.closeMenu()
             }

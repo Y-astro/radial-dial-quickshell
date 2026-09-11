@@ -11,8 +11,60 @@ import socket
 import json
 import subprocess
 import time
+from pathlib import Path
 
 CACHE_FILE = "/tmp/radial_tabs_cache.json"
+
+HIGH_POWER_VRAM_BYTES = 2 * 1024 * 1024 * 1024
+
+def detect_render_mode():
+    """Return ``gpu`` only for a dedicated/high-performance graphics device.
+
+    Every desktop has a GPU, so treating any VGA controller as high power would
+    incorrectly enable the expensive path on integrated Intel/AMD graphics.
+    Prefer DRM device metadata, with lspci names as a fallback.
+    """
+    drm_devices = Path("/sys/class/drm").glob("card[0-9]*/device")
+    for device in drm_devices:
+        try:
+            vendor = (device / "vendor").read_text().strip().lower()
+        except OSError:
+            continue
+
+        # NVIDIA DRM devices are discrete on the supported laptop/desktop
+        # platforms. AMD is considered high power when it exposes >= 2 GiB of
+        # dedicated VRAM; integrated AMD graphics normally use shared memory.
+        if vendor == "0x10de":
+            return "gpu"
+        if vendor == "0x1002":
+            try:
+                vram = int((device / "mem_info_vram_total").read_text().strip())
+                if vram >= HIGH_POWER_VRAM_BYTES:
+                    return "gpu"
+            except (OSError, ValueError):
+                pass
+
+    try:
+        result = subprocess.run(
+            ["lspci", "-nn"], capture_output=True, text=True, timeout=0.5,
+            check=False
+        )
+        adapters = "\n".join(
+            line.lower() for line in result.stdout.splitlines()
+            if "vga compatible controller" in line.lower()
+            or "3d controller" in line.lower()
+            or "display controller" in line.lower()
+        )
+        if "nvidia" in adapters or ("intel" in adapters and " arc" in adapters):
+            return "gpu"
+        if "amd" in adapters or "ati" in adapters:
+            high_power_amd_names = ("radeon rx", "radeon pro w", "radeon instinct")
+            if any(name in adapters for name in high_power_amd_names):
+                return "gpu"
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+    return "low-power"
 
 def get_hypr_socket():
     runtime_dir = os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
@@ -102,6 +154,12 @@ def cmd_context():
         "clients": clients
     }))
 
+def cmd_tabs():
+    print(json.dumps(get_cached_tabs()))
+
+def cmd_render_mode():
+    print(detect_render_mode())
+
 def cmd_clients():
     print(json.dumps(get_valid_clients()))
 
@@ -176,6 +234,10 @@ if __name__ == "__main__":
         cmd_context()
     elif cmd == "clients":
         cmd_clients()
+    elif cmd == "tabs":
+        cmd_tabs()
+    elif cmd == "render_mode":
+        cmd_render_mode()
     elif cmd == "clipboard":
         cmd_clipboard()
     elif cmd == "audio_sinks":

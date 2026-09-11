@@ -52,88 +52,7 @@ sed "s|PLACEHOLDER_PATH|$QS_DIR/modules/ii/radialMenu/extension|g" "$QS_DIR/modu
 sed "s|PLACEHOLDER_PATH|$QS_DIR/modules/ii/radialMenu/extension|g" "$QS_DIR/modules/ii/radialMenu/extension/radial_tabs.json" > "$HOME/.config/mozilla/native-messaging-hosts/radial_tabs.json" 2>/dev/null || true
 echo -e "${GREEN}[✓] Native Messaging host registered.${RESET}"
 
-# 4. Patch GlobalStates.qml
-GLOBAL_STATES="$QS_DIR/GlobalStates.qml"
-if [ -f "$GLOBAL_STATES" ]; then
-    if ! grep -q "radialMenuOpen" "$GLOBAL_STATES"; then
-        echo -e "${BLUE}[*] Adding radial menu properties to GlobalStates.qml...${RESET}"
-        python3 -c "
-with open('$GLOBAL_STATES', 'r') as f:
-    content = f.read()
-
-patch = '''
-    // Radial menu state
-    property bool radialMenuOpen: false
-    property real radialMenuX: 0
-    property real radialMenuY: 0
-    property var radialMenuScreen: null
-    property var radialMenuContextWindow: ({})
-    property var browserTabsList: []
-
-    Process {
-        id: radialMenuCursorProc
-        command: ['python3', '$QS_DIR/modules/ii/radialMenu/hypr_ipc.py', 'context']
-        running: false
-        stdout: StdioCollector {
-            onStreamFinished: {
-                try {
-                    const data = JSON.parse(text.trim())
-                    const pos = data.cursor || { x: 0, y: 0 }
-                    let screen = null
-                    for (let i = 0; i < Quickshell.screens.length; i++) {
-                        const s = Quickshell.screens[i]
-                        if (pos.x >= s.x && pos.x < s.x + s.width &&
-                            pos.y >= s.y && pos.y < s.y + s.height) {
-                            screen = s
-                            break
-                        }
-                    }
-                    if (!screen) {
-                        const name = Hyprland.focusedMonitor?.name
-                        screen = Quickshell.screens.find(s => s.name === name) ?? Quickshell.screens[0]
-                    }
-                    root.radialMenuContextWindow = data.window || {}
-                    root.browserTabsList = data.tabs || []
-                    root.radialMenuScreen = screen
-                    root.radialMenuX = pos.x - screen.x
-                    root.radialMenuY = pos.y - screen.y
-                    root.radialMenuOpen = true
-                } catch (e) {
-                    console.warn('[RadialMenu] parse failed:', e)
-                }
-            }
-        }
-    }
-
-    Process {
-        id: refreshTabsProc
-        command: ['python3', '$QS_DIR/modules/ii/radialMenu/get_browser_tabs.py']
-        running: false
-        stdout: StdioCollector {
-            onStreamFinished: {
-                try {
-                    root.browserTabsList = JSON.parse(text.trim())
-                } catch(e) {}
-            }
-        }
-    }
-
-    function refreshTabs() {
-        refreshTabsProc.running = true
-    }
-'''
-
-if 'property bool' in content:
-    idx = content.find('property bool')
-    new_content = content[:idx] + patch.strip() + '\n\n' + content[idx:]
-    with open('$GLOBAL_STATES', 'w') as f:
-        f.write(new_content)
-    print('Patched GlobalStates.qml successfully.')
-"
-    fi
-fi
-
-# 5. Patch IllogicalImpulseFamily.qml / shell.qml
+# 4. Patch IllogicalImpulseFamily.qml / shell.qml
 II_FAMILY="$QS_DIR/panelFamilies/IllogicalImpulseFamily.qml"
 if [ -f "$II_FAMILY" ]; then
     if ! grep -q "RadialMenu" "$II_FAMILY"; then
@@ -157,12 +76,16 @@ print('Instantiated RadialMenu in IllogicalImpulseFamily.qml.')
     fi
 fi
 
-# 6. Patch Hyprland layer rules
+# 5. Match compositor effects to the renderer selected by the module's shared
+# detector. Dedicated/high-performance GPUs get blur; integrated/unknown GPUs
+# use the low-power path.
 HYPR_RULES="$HOME/.config/hypr/hyprland/rules.lua"
-if [ -f "$HYPR_RULES" ]; then
-    if ! grep -q "quickshell:radialMenu" "$HYPR_RULES"; then
-        echo -e "${BLUE}[*] Adding Hyprland frosted glass layer rules...${RESET}"
-        cat << 'EOF' >> "$HYPR_RULES"
+RENDER_MODE="$(python3 "$SCRIPT_DIR/modules/ii/radialMenu/hypr_ipc.py" render_mode 2>/dev/null || echo low-power)"
+if [ "$RENDER_MODE" = "gpu" ] && [ -f "$HYPR_RULES" ]; then
+    echo -e "${BLUE}[*] Dedicated GPU detected; enabling high-power rendering...${RESET}"
+    sed -i '/-- Quickshell: Radial Menu (Frosted Glass Blur)/d' "$HYPR_RULES"
+    sed -i '/namespace = "quickshell:radialMenu"/d' "$HYPR_RULES"
+    cat << 'EOF' >> "$HYPR_RULES"
 
 -- Quickshell: Radial Menu (Frosted Glass Blur)
 hl.layer_rule({ match = { namespace = "quickshell:radialMenu" }, blur = true})
@@ -170,11 +93,16 @@ hl.layer_rule({ match = { namespace = "quickshell:radialMenu" }, ignore_alpha = 
 hl.layer_rule({ match = { namespace = "quickshell:radialMenu" }, xray = false})
 hl.layer_rule({ match = { namespace = "quickshell:radialMenu" }, no_anim = true})
 EOF
-        echo -e "${GREEN}[✓] Added Hyprland layer rules.${RESET}"
+    echo -e "${GREEN}[✓] GPU framebuffer renderer and compositor blur enabled.${RESET}"
+else
+    if [ -f "$HYPR_RULES" ]; then
+        sed -i '/-- Quickshell: Radial Menu (Frosted Glass Blur)/d' "$HYPR_RULES"
+        sed -i '/namespace = "quickshell:radialMenu"/d' "$HYPR_RULES"
     fi
+    echo -e "${GREEN}[✓] Integrated/unknown GPU: low-power renderer selected; blur disabled.${RESET}"
 fi
 
-# 7. Patch Hyprland keybind (Super + Tab)
+# 6. Patch Hyprland keybind (Super + Tab)
 HYPR_BINDS="$HOME/.config/hypr/hyprland/keybinds.lua"
 if [ -f "$HYPR_BINDS" ]; then
     if ! grep -q "quickshell:radialMenu" "$HYPR_BINDS"; then
@@ -189,7 +117,7 @@ EOF
     fi
 fi
 
-# 8. Reload and verify
+# 7. Reload and verify
 echo -e "${BLUE}[*] Reloading Hyprland and Quickshell...${RESET}"
 hyprctl reload >/dev/null 2>&1 || true
 killall qs quickshell 2>/dev/null || true

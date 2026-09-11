@@ -60,21 +60,39 @@ Singleton {
     }
     function refreshClients() { fetchClientsProc.running = true }
 
-    function focusWindow(addr: string) {
+    function focusWindow(addr, ws) {
         if (!addr) return
+        if (typeof GlobalStates !== "undefined" && GlobalStates) {
+            GlobalStates.radialMenuOpen = false
+        }
+        let wsId = ""
+        if (ws !== undefined && ws !== null && ws !== "") {
+            wsId = String(typeof ws === "object" ? (ws.name || ws.id || "") : ws)
+        }
+        if (wsId) {
+            try {
+                if (wsId.startsWith("special:")) {
+                    Hyprland.dispatch('hl.dsp.focus({ workspace = "' + wsId + '" })')
+                } else {
+                    Hyprland.dispatch('hl.dsp.focus({ workspace = ' + wsId + ' })')
+                }
+            } catch(e) {}
+        }
         try {
             Hyprland.dispatch('hl.dsp.focus({ window = "address:' + addr + '" })')
         } catch(e) {}
-        try {
-            Hyprland.dispatch('focuswindow address:' + addr)
-        } catch(e) {}
+        const cmd = (wsId ? ('hyprctl dispatch \'hl.dsp.focus({ workspace = ' + (wsId.startsWith("special:") ? ('"' + wsId + '"') : wsId) + ' })\'; ') : '') +
+            'hyprctl dispatch \'hl.dsp.focus({ window = "address:' + addr + '" })\''
+        exec(cmd)
     }
 
-    function resolveAppIcon(appClass: string) {
+    function resolveAppIcon(appClass) {
         const c = (appClass || "").toLowerCase()
         if (c.includes("firefox") || c.includes("zen") || c.includes("chrome") || c.includes("chromium") || c.includes("brave") || c.includes("browser")) return "globe"
         if (c.includes("kitty") || c.includes("terminal") || c.includes("alacritty") || c.includes("foot") || c.includes("konsole") || c.includes("xterm")) return "terminal"
         if (c.includes("code") || c.includes("cursor") || c.includes("antigravity") || c.includes("nvim") || c.includes("studio") || c.includes("dev")) return "code"
+        if (c.includes("kate") || c.includes("gedit") || c.includes("sublime") || c.includes("text") || c.includes("note")) return "edit_note"
+        if (c.includes("monitor") || c.includes("task") || c.includes("btop") || c.includes("htop")) return "monitoring"
         if (c.includes("discord") || c.includes("vesktop") || c.includes("telegram") || c.includes("slack") || c.includes("whatsapp")) return "chat"
         if (c.includes("spotify") || c.includes("music") || c.includes("rhythmbox")) return "music_note"
         if (c.includes("dolphin") || c.includes("nautilus") || c.includes("thunar") || c.includes("nemo") || c.includes("file")) return "folder"
@@ -84,20 +102,20 @@ Singleton {
         return "window"
     }
 
-    function adjustVolume(deltaPercent: int) {
+    function adjustVolume(deltaPercent) {
         const sign = deltaPercent >= 0 ? "+" : "-"
         const mag = Math.abs(deltaPercent)
         exec("wpctl set-volume @DEFAULT_AUDIO_SINK@ " + mag + "%" + sign + " || pactl set-sink-volume @DEFAULT_SINK@ " + sign + mag + "%")
     }
 
-    function adjustBrightness(deltaPercent: int) {
+    function adjustBrightness(deltaPercent) {
         const sign = deltaPercent >= 0 ? "+" : "-"
         const mag = Math.abs(deltaPercent)
         exec("brightnessctl s " + mag + "%" + sign)
     }
 
     // Execute arbitrary bash command detached
-    function exec(cmd: string) {
+    function exec(cmd) {
         Quickshell.execDetached(["bash", "-c", cmd])
     }
 
@@ -122,15 +140,23 @@ Singleton {
     }
 
     // Send keystroke reliably to a target window
-    function sendBrowserKey(winAddress: string, keyCmd: string) {
-        const addr = winAddress ? 'address:' + winAddress : ''
-        const focusCmd = addr ? 'hyprctl dispatch focuswindow "' + addr + '" 2>/dev/null; ' : ''
-        const cmd = focusCmd + 'sleep 0.05; ' + keyCmd
+    function sendBrowserKey(winAddress, keyCmd, wsId) {
+        if (typeof GlobalStates !== "undefined" && GlobalStates) {
+            GlobalStates.radialMenuOpen = false
+        }
+        let focusCmd = ""
+        if (wsId) {
+            focusCmd += 'hyprctl dispatch \'hl.dsp.focus({ workspace = ' + (String(wsId).startsWith("special:") ? ('"' + wsId + '"') : wsId) + ' })\'; '
+        }
+        if (winAddress) {
+            focusCmd += 'hyprctl dispatch \'hl.dsp.focus({ window = "address:' + winAddress + '" })\'; '
+        }
+        const cmd = focusCmd + 'sleep 0.12; ' + keyCmd
         exec(cmd)
     }
 
     // Switch to browser tab by index (1-based)
-    function switchToBrowserTab(tabIdx: int, winAddress: string) {
+    function switchToBrowserTab(tabIdx, winAddress, wsId) {
         let keyCmd = ''
         if (tabIdx >= 1 && tabIdx <= 8) {
             keyCmd = 'wtype -M alt -k ' + tabIdx + ' -m alt'
@@ -142,7 +168,7 @@ Singleton {
                 keyCmd += ' && sleep 0.04 && wtype -M ctrl -k Tab -m ctrl'
             }
         }
-        sendBrowserKey(winAddress, keyCmd)
+        sendBrowserKey(winAddress, keyCmd, wsId)
     }
 
     // Resolve Terminal (Kitty/Konsole) CWD and open default file manager
@@ -160,32 +186,49 @@ Singleton {
     }
 
     // Universal File Jump handler: auto-mount removable drives if required, copy/move URIs from clipboard, or open folder
-    function performFileJump(destPath: string) {
+    function performFileJump(destPath) {
         const script = `
-import os, shutil, sys, urllib.parse, subprocess
+import os, shutil, sys, urllib.parse, subprocess, json, time
+
 dest = os.path.expanduser("${destPath}")
 
-# If destination path is on an unmounted removable/internal drive, attempt auto-mounting via udisksctl
-if not os.path.isdir(dest):
-    # Search for matching block devices if path is under /run/media or /media
-    if "/media" in dest:
-        parts = dest.split("/media/", 1)[-1].split("/")
-        vol_name = parts[1] if len(parts) > 1 else parts[0]
-        try:
-            p = subprocess.run(["lsblk", "-rno", "NAME,LABEL,UUID"], capture_output=True, text=True)
-            for line in p.stdout.splitlines():
-                fields = line.strip().split()
-                if len(fields) >= 2 and (vol_name in fields[1] or (len(fields) >= 3 and vol_name in fields[2])):
-                    dev_node = "/dev/" + fields[0]
-                    subprocess.run(["udisksctl", "mount", "-b", dev_node], capture_output=True, text=True, timeout=5)
-                    break
-        except Exception:
-            pass
+# If destination path is on an unmounted drive, attempt auto-mounting via udisksctl
+if not os.path.exists(dest):
+    try:
+        p = subprocess.run(["lsblk", "-J", "-o", "NAME,LABEL,UUID,MOUNTPOINTS,FSTYPE"], capture_output=True, text=True, timeout=3)
+        if p.returncode == 0 and p.stdout:
+            data = json.loads(p.stdout)
+            devices = []
+            def collect(devs):
+                for d in devs:
+                    devices.append(d)
+                    if "children" in d:
+                        collect(d["children"])
+            collect(data.get("blockdevices", []))
 
-try:
-    os.makedirs(dest, exist_ok=True)
-except Exception:
-    pass
+            for dev in devices:
+                lbl = dev.get("label")
+                uuid = dev.get("uuid")
+                name = dev.get("name")
+                if not name:
+                    continue
+                if (lbl and lbl in dest) or (uuid and uuid in dest):
+                    mounts = [m for m in (dev.get("mountpoints") or []) if m]
+                    if not mounts:
+                        dev_node = "/dev/" + name
+                        subprocess.run(["udisksctl", "mount", "-b", dev_node], capture_output=True, text=True, timeout=5)
+                        time.sleep(0.15)
+                    break
+    except Exception:
+        pass
+
+# Only create directory if destination path is safely resolved (parent directory exists and is accessible)
+parent = os.path.dirname(dest.rstrip("/"))
+if parent and os.path.isdir(parent):
+    try:
+        os.makedirs(dest, exist_ok=True)
+    except Exception:
+        pass
 
 try:
     p = subprocess.run(['wl-paste', '-t', 'text/uri-list'], capture_output=True, text=True, timeout=1)
@@ -193,7 +236,7 @@ try:
 except Exception:
     uris = []
 
-if uris:
+if uris and os.path.isdir(dest):
     copied = 0
     for uri in uris:
         raw_path = urllib.parse.unquote(uri[7:])
@@ -211,15 +254,18 @@ if uris:
     if copied > 0:
         subprocess.run(['notify-send', '-a', 'Radial Menu', 'File Jump', f'Copied {copied} item(s) to {dest}'])
 
-# Always open file manager navigating to destination folder
+target_to_open = dest if os.path.exists(dest) else (parent if (parent and os.path.exists(parent)) else os.path.expanduser("~"))
 try:
-    subprocess.Popen(['dolphin', dest])
+    subprocess.Popen(['dolphin', target_to_open])
 except Exception:
     try:
-        subprocess.Popen(['xdg-open', dest])
+        subprocess.Popen(['xdg-open', target_to_open])
     except Exception:
         pass
 `
+        if (typeof GlobalStates !== "undefined" && GlobalStates) {
+            GlobalStates.radialMenuOpen = false
+        }
         Quickshell.execDetached(["python3", "-c", script])
     }
 
@@ -519,12 +565,7 @@ except Exception:
             category: "Tools",
             desc: "Open wallpaper selector",
             action: () => {
-                if (typeof GlobalStates !== "undefined" && GlobalStates) {
-                    GlobalStates.wallpaperSelectorTarget = "wallpaper"
-                    GlobalStates.wallpaperSelectorOpen = true
-                } else {
-                    exec("waypaper || swww-daemon &")
-                }
+                exec("hyprctl dispatch 'hl.dsp.global(\"quickshell:wallpaperSelectorToggle\")' || wtype -M ctrl -M super -k t -m super -m ctrl &")
             }
         },
         "colorpicker": {
@@ -677,13 +718,7 @@ except Exception:
             icon: "power_settings_new",
             category: "System",
             desc: "Open power and session dialog",
-            action: () => {
-                if (typeof GlobalStates !== "undefined" && GlobalStates) {
-                    GlobalStates.sessionOpen = true
-                } else {
-                    exec("wlogout || hyprlock &")
-                }
-            }
+            action: () => exec("pkill wlogout || wlogout -p layer-shell &")
         },
         "lock": {
             id: "lock",
@@ -799,14 +834,16 @@ except Exception:
             "btop",
             "session",
             "filejump",
-            "calc"
+            "calc",
+            "active_apps"
         ],
         "kittySlices": [
             "scratchpad",
             "kitty_new_window",
             "kitty_agy",
             "kitty_clear",
-            "kitty_dolphin"
+            "kitty_dolphin",
+            "active_apps"
         ],
         "browserSlices": [
             "scratchpad",
@@ -814,7 +851,27 @@ except Exception:
             "browser_new_tab",
             "browser_close_tab",
             "browser_dup_tab",
-            "browser_reopen_tab"
+            "browser_reopen_tab",
+            "active_apps"
+        ],
+        "codeSlices": [
+            "scratchpad",
+            "code_palette",
+            "code_terminal",
+            "code_git_status",
+            "code_format",
+            "code_run",
+            "active_apps"
+        ],
+        "mediaSlices": [
+            "scratchpad",
+            "media_play_pause",
+            "media_prev",
+            "media_next",
+            "volume_up",
+            "volume_down",
+            "audio_sink",
+            "active_apps"
         ],
         "fileJumpTargets": [
             { "id": "downloads", "label": "Downloads", "path": "~/Downloads", "icon": "download" },
@@ -840,9 +897,7 @@ except Exception:
                         root.userConfig = Object.assign({}, root.userConfig, parsed)
                         root.configChanged()
                     }
-                } catch(e) {
-                    console.log("[RadialMenuActions] Config load notice:", e)
-                }
+                } catch(e) {}
             }
         }
     }
@@ -850,17 +905,78 @@ except Exception:
     // Save configuration atomically to ~/.config/radialMenu/config.json
     function saveConfig(cfg) {
         root.userConfig = cfg
+        root.configChanged()
         const jsonStr = JSON.stringify(cfg, null, 2)
         const b64 = Qt.btoa(jsonStr)
         const pyScript = 'import base64, os; p = os.path.expanduser("~/.config/radialMenu/config.json"); os.makedirs(os.path.dirname(p), exist_ok=True); data = base64.b64decode("' + b64 + '").decode("utf-8"); open(p, "w").write(data)'
         Quickshell.execDetached(["python3", "-c", pyScript])
-        root.configChanged()
     }
 
-    // Native Directory Picker Process (kdialog or zenity)
+    // Reset configuration to factory defaults
+    function resetConfig() {
+        const factory = {
+            "globalSlices": [
+                "scratchpad",
+                "terminal",
+                "wallpapers",
+                "btop",
+                "session",
+                "filejump",
+                "calc",
+                "active_apps"
+            ],
+            "kittySlices": [
+                "scratchpad",
+                "kitty_new_window",
+                "kitty_agy",
+                "kitty_clear",
+                "kitty_dolphin",
+                "active_apps"
+            ],
+            "browserSlices": [
+                "scratchpad",
+                "browsertabs",
+                "browser_new_tab",
+                "browser_close_tab",
+                "browser_dup_tab",
+                "browser_reopen_tab",
+                "active_apps"
+            ],
+            "codeSlices": [
+                "scratchpad",
+                "code_palette",
+                "code_terminal",
+                "code_git_status",
+                "code_format",
+                "code_run",
+                "active_apps"
+            ],
+            "mediaSlices": [
+                "scratchpad",
+                "media_play_pause",
+                "media_prev",
+                "media_next",
+                "volume_up",
+                "volume_down",
+                "audio_sink",
+                "active_apps"
+            ],
+            "fileJumpTargets": [
+                { "id": "downloads", "label": "Downloads", "path": "~/Downloads", "icon": "download" },
+                { "id": "documents", "label": "Documents", "path": "~/Documents", "icon": "description" },
+                { "id": "pictures",  "label": "Pictures",  "path": "~/Pictures",  "icon": "photo" },
+                { "id": "music",     "label": "Music",     "path": "~/Music",     "icon": "music_note" },
+                { "id": "home",      "label": "Home",      "path": "~",           "icon": "home" },
+                { "id": "temp",      "label": "Temp",      "path": "/tmp",        "icon": "folder_delete" }
+            ]
+        }
+        saveConfig(factory)
+    }
+
+    // Native Qt directory picker via zenity/kdialog/yad fallback
     Process {
         id: dirPickerProc
-        command: ["bash", "-c", "kdialog --getexistingdirectory ~ 2>/dev/null || zenity --file-selection --directory 2>/dev/null"]
+        command: ["bash", "-c", "kdialog --getexistingdirectory \"$HOME\" 2>/dev/null || zenity --file-selection --directory 2>/dev/null || qarma --file-selection --directory 2>/dev/null || true"]
         running: false
         stdout: StdioCollector {
             onStreamFinished: {
@@ -879,15 +995,19 @@ except Exception:
     // ── Customization APIs: Slices & File Jump Targets ────────────────────────
 
     // Get active slice IDs for a given context
-    function getActiveSliceIds(context: string) {
+    function getActiveSliceIds(context) {
         let key = "globalSlices"
         if (context === "kitty") key = "kittySlices"
         else if (context === "browser") key = "browserSlices"
         else if (context === "code") key = "codeSlices"
         else if (context === "media") key = "mediaSlices"
 
-        if (root.userConfig && Array.isArray(root.userConfig[key])) {
-            return root.userConfig[key]
+        if (root.userConfig && Array.isArray(root.userConfig[key]) && root.userConfig[key].length > 0) {
+            const list = root.userConfig[key].slice()
+            if (!list.includes("active_apps")) {
+                list.push("active_apps")
+            }
+            return list
         }
         if (key === "kittySlices") return ["scratchpad", "kitty_new_window", "kitty_agy", "kitty_clear", "kitty_dolphin", "active_apps"]
         if (key === "browserSlices") return ["scratchpad", "browsertabs", "browser_new_tab", "browser_close_tab", "browser_dup_tab", "browser_reopen_tab", "active_apps"]
@@ -897,7 +1017,7 @@ except Exception:
     }
 
     // Add a function to the current dial (modifies dial structure)
-    function addSliceToDial(context: string, functionId: string) {
+    function addSliceToDial(context, functionId) {
         const cfg = JSON.parse(JSON.stringify(root.userConfig))
         let key = "globalSlices"
         if (context === "kitty") key = "kittySlices"
@@ -916,7 +1036,7 @@ except Exception:
     }
 
     // Remove a function from the current dial (modifies dial structure)
-    function removeSliceFromDial(context: string, functionId: string) {
+    function removeSliceFromDial(context, functionId) {
         const cfg = JSON.parse(JSON.stringify(root.userConfig))
         let key = "globalSlices"
         if (context === "kitty") key = "kittySlices"
@@ -938,7 +1058,7 @@ except Exception:
     }
 
     // Swap any slice on the current wheel
-    function swapSlice(context: string, slotIndex: int, newFunctionId: string) {
+    function swapSlice(context, slotIndex, newFunctionId) {
         const cfg = JSON.parse(JSON.stringify(root.userConfig))
         let key = "globalSlices"
         if (context === "kitty") key = "kittySlices"
@@ -960,7 +1080,7 @@ except Exception:
     }
 
     // Reorder slice from fromIndex to toIndex on the current wheel
-    function reorderSlice(context: string, fromIndex: int, toIndex: int) {
+    function reorderSlice(context, fromIndex, toIndex) {
         if (fromIndex === toIndex || fromIndex < 0 || toIndex < 0) return
 
         const cfg = JSON.parse(JSON.stringify(root.userConfig))
@@ -982,7 +1102,7 @@ except Exception:
     }
 
     // Add a new target to File Jump
-    function addFileJumpTarget(label: string, path: string, icon: string) {
+    function addFileJumpTarget(label, path, icon) {
         const cfg = JSON.parse(JSON.stringify(root.userConfig))
         if (!Array.isArray(cfg.fileJumpTargets)) {
             cfg.fileJumpTargets = []
@@ -997,7 +1117,7 @@ except Exception:
     }
 
     // Edit an existing File Jump target
-    function updateFileJumpTarget(index: int, label: string, path: string, icon: string) {
+    function updateFileJumpTarget(index, label, path, icon) {
         const cfg = JSON.parse(JSON.stringify(root.userConfig))
         if (Array.isArray(cfg.fileJumpTargets) && index >= 0 && index < cfg.fileJumpTargets.length) {
             cfg.fileJumpTargets[index].label = label
@@ -1008,7 +1128,7 @@ except Exception:
     }
 
     // Remove a File Jump target
-    function removeFileJumpTarget(index: int) {
+    function removeFileJumpTarget(index) {
         const cfg = JSON.parse(JSON.stringify(root.userConfig))
         if (Array.isArray(cfg.fileJumpTargets) && index >= 0 && index < cfg.fileJumpTargets.length) {
             cfg.fileJumpTargets.splice(index, 1)
@@ -1019,7 +1139,7 @@ except Exception:
     // ── Active Apps Sub-Slice Generator (All Workspaces) ────────────────────
     function getActiveAppsSubSlices() {
         let clients = []
-        if (GlobalStates.activeClientsList && Array.isArray(GlobalStates.activeClientsList) && GlobalStates.activeClientsList.length > 0) {
+        if (typeof GlobalStates !== "undefined" && GlobalStates && GlobalStates.activeClientsList && Array.isArray(GlobalStates.activeClientsList) && GlobalStates.activeClientsList.length > 0) {
             clients = GlobalStates.activeClientsList
         } else if (typeof HyprlandData !== "undefined" && HyprlandData.windowList && HyprlandData.windowList.length > 0) {
             clients = HyprlandData.windowList
@@ -1032,12 +1152,16 @@ except Exception:
 
         const validClients = clients.filter(c => {
             if (!c || !c.address) return false
-            const wsName = c.workspace ? (c.workspace.name || String(c.workspace.id || "")) : (c.workspaceId ? String(c.workspaceId) : "")
+            const wsVal = c.workspace
+            const wsName = (typeof wsVal === "object" && wsVal !== null)
+                ? (wsVal.name || String(wsVal.id || ""))
+                : String(wsVal || c.workspaceId || "")
             if (wsName.startsWith("special:quickshell")) return false
             return true
         })
 
         if (validClients.length === 0) {
+            refreshClients()
             return [{
                 id: "no_windows",
                 label: "No Open Apps",
@@ -1049,33 +1173,51 @@ except Exception:
 
         const classCounts = {}
         validClients.forEach(c => {
-            const cls = (c.class || "App").toLowerCase()
+            let cls = (c.class || "App")
+            if (cls.includes(".")) cls = cls.split(".").pop()
+            cls = cls.toLowerCase()
             classCounts[cls] = (classCounts[cls] || 0) + 1
         })
 
         const classSeen = {}
         return validClients.map((c, i) => {
             const rawClass = c.class || "App"
-            const lowerClass = rawClass.toLowerCase()
-            const wsName = c.workspace ? (c.workspace.name || String(c.workspace.id || "")) : (c.workspaceId ? String(c.workspaceId) : "1")
+            let cleanClass = rawClass
+            if (cleanClass.includes(".")) cleanClass = cleanClass.split(".").pop()
+            cleanClass = cleanClass.charAt(0).toUpperCase() + cleanClass.slice(1)
+            const lowerClass = cleanClass.toLowerCase()
+
+            const wsVal = c.workspace
+            const wsName = (typeof wsVal === "object" && wsVal !== null)
+                ? (wsVal.name || String(wsVal.id || ""))
+                : String(wsVal || c.workspaceId || "1")
+
             classSeen[lowerClass] = (classSeen[lowerClass] || 0) + 1
 
-            let displayLabel = rawClass.charAt(0).toUpperCase() + rawClass.slice(1)
+            let displayLabel = cleanClass
             if (classCounts[lowerClass] > 1) {
                 displayLabel += " #" + classSeen[lowerClass]
             }
-            displayLabel += " [WS " + wsName + "]"
+            if (wsName) {
+                displayLabel += " [WS " + wsName + "]"
+            }
 
-            const iconName = resolveAppIcon(lowerClass)
+            const appTitle = (c.title || "").trim()
+            let fullTitle = displayLabel
+            if (appTitle && appTitle.toLowerCase() !== lowerClass && appTitle.toLowerCase() !== rawClass.toLowerCase()) {
+                fullTitle += " — " + appTitle
+            }
+
+            const iconName = resolveAppIcon(rawClass.toLowerCase())
             const addr = c.address
 
             return {
                 id: "app_" + addr,
                 label: displayLabel,
-                fullTitle: (c.title ? (c.title + " (" + rawClass + ")") : displayLabel),
+                fullTitle: fullTitle,
                 icon: iconName,
                 hasSubTier: false,
-                action: () => focusWindow(addr)
+                action: () => focusWindow(addr, wsName)
             }
         })
     }
@@ -1131,7 +1273,7 @@ except Exception:
     }
 
     // ── Helper to resolve slice item ──────────────────────────────────────────
-    function resolveSliceItem(fnId: string, slotIdx: int, win) {
+    function resolveSliceItem(fnId, slotIdx, win) {
         if (fnId === "scratchpad") {
             const sp = getScratchpadSlice(win)
             sp.slotIndex = slotIdx
@@ -1161,7 +1303,7 @@ except Exception:
     }
 
     // ── Slices Generator ──────────────────────────────────────────────────────
-    function getSlicesFor(tier: string, context: string, win) {
+    function getSlicesFor(tier, context, win) {
         // Scratchpad Workspace Selector Ring
         if (tier === "active_apps") {
             return getActiveAppsSubSlices()
@@ -1191,6 +1333,10 @@ except Exception:
         // Browser Real-time Tabs Ring
         if (tier === "browsertabs") {
             const winAddr = win?.address || ""
+            const wsVal = win?.workspace
+            const wsId = (typeof wsVal === "object" && wsVal !== null)
+                ? String(wsVal.name || wsVal.id || "")
+                : String(wsVal || win?.workspaceId || "")
             let rawTabs = []
             if (typeof GlobalStates !== "undefined" && GlobalStates && GlobalStates.browserTabsList) {
                 rawTabs = GlobalStates.browserTabsList
@@ -1202,19 +1348,19 @@ except Exception:
                         label: t.title || 'Tab ' + idx,
                         icon: idx <= 8 ? 'counter_' + idx : "tab",
                         hasSubTier: false,
-                        action: () => switchToBrowserTab(idx, winAddr)
+                        action: () => switchToBrowserTab(idx, winAddr, wsId)
                     }
                 })
             }
             return [
-                { label: "Tab 1", icon: "counter_1", action: () => switchToBrowserTab(1, winAddr) },
-                { label: "Tab 2", icon: "counter_2", action: () => switchToBrowserTab(2, winAddr) },
-                { label: "Tab 3", icon: "counter_3", action: () => switchToBrowserTab(3, winAddr) },
-                { label: "Tab 4", icon: "counter_4", action: () => switchToBrowserTab(4, winAddr) },
-                { label: "Tab 5", icon: "counter_5", action: () => switchToBrowserTab(5, winAddr) },
-                { label: "Tab 6", icon: "counter_6", action: () => switchToBrowserTab(6, winAddr) },
-                { label: "Tab 7", icon: "counter_7", action: () => switchToBrowserTab(7, winAddr) },
-                { label: "Tab 8", icon: "counter_8", action: () => switchToBrowserTab(8, winAddr) }
+                { label: "Tab 1", icon: "counter_1", action: () => switchToBrowserTab(1, winAddr, wsId) },
+                { label: "Tab 2", icon: "counter_2", action: () => switchToBrowserTab(2, winAddr, wsId) },
+                { label: "Tab 3", icon: "counter_3", action: () => switchToBrowserTab(3, winAddr, wsId) },
+                { label: "Tab 4", icon: "counter_4", action: () => switchToBrowserTab(4, winAddr, wsId) },
+                { label: "Tab 5", icon: "counter_5", action: () => switchToBrowserTab(5, winAddr, wsId) },
+                { label: "Tab 6", icon: "counter_6", action: () => switchToBrowserTab(6, winAddr, wsId) },
+                { label: "Tab 7", icon: "counter_7", action: () => switchToBrowserTab(7, winAddr, wsId) },
+                { label: "Tab 8", icon: "counter_8", action: () => switchToBrowserTab(8, winAddr, wsId) }
             ]
         }
 
@@ -1254,100 +1400,13 @@ except Exception:
             return slices
         }
 
-        // Context: Kitty Terminal
-        if (context === "kitty") {
-            const ids = (root.userConfig && Array.isArray(root.userConfig.kittySlices))
-                ? root.userConfig.kittySlices
-                : ["scratchpad", "kitty_new_window", "kitty_agy", "kitty_clear", "kitty_dolphin"]
-
-            return ids.map((fnId, slotIdx) => {
-                if (fnId === "scratchpad") {
-                    const sp = getScratchpadSlice(win)
-                    sp.slotIndex = slotIdx
-                    sp.functionId = "scratchpad"
-                    return sp
-                }
-                const def = root.functionRegistry[fnId]
-                if (!def) {
-                    return {
-                        slotIndex: slotIdx,
-                        functionId: fnId,
-                        label: fnId,
-                        icon: "extension",
-                        hasSubTier: false,
-                        action: () => {}
-                    }
-                }
-                return {
-                    slotIndex: slotIdx,
-                    functionId: fnId,
-                    label: def.label,
-                    icon: def.icon,
-                    hasSubTier: !!def.hasSubTier,
-                    subTierType: def.subTierType || "",
-                    action: def.action
-                }
-            })
-        }
-
-        // Context: Browser
-        if (context === "browser") {
-            const winAddr = win?.address || ""
-            let tabCount = 0
-            if (typeof GlobalStates !== "undefined" && GlobalStates && GlobalStates.browserTabsList) {
-                tabCount = GlobalStates.browserTabsList.length
-            }
-            const tabSliceLabel = tabCount > 0 ? 'Switch Tab (' + tabCount + ')' : "Switch Tab"
-
-            const ids = (root.userConfig && Array.isArray(root.userConfig.browserSlices))
-                ? root.userConfig.browserSlices
-                : ["scratchpad", "browsertabs", "browser_new_tab", "browser_close_tab", "browser_dup_tab", "browser_reopen_tab"]
-
-            return ids.map((fnId, slotIdx) => {
-                if (fnId === "scratchpad") {
-                    const sp = getScratchpadSlice(win)
-                    sp.slotIndex = slotIdx
-                    sp.functionId = "scratchpad"
-                    return sp
-                }
-                if (fnId === "browsertabs") {
-                    return {
-                        slotIndex: slotIdx,
-                        functionId: "browsertabs",
-                        label: tabSliceLabel,
-                        icon: "tabs",
-                        hasSubTier: true,
-                        subTierType: "browsertabs",
-                        action: null
-                    }
-                }
-                const def = root.functionRegistry[fnId]
-                if (!def) {
-                    return {
-                        slotIndex: slotIdx,
-                        functionId: fnId,
-                        label: fnId,
-                        icon: "extension",
-                        hasSubTier: false,
-                        action: () => {}
-                    }
-                }
-                return {
-                    slotIndex: slotIdx,
-                    functionId: fnId,
-                    label: def.label,
-                    icon: def.icon,
-                    hasSubTier: !!def.hasSubTier,
-                    subTierType: def.subTierType || "",
-                    action: def.action
-                }
-            })
-        }
-
-        // Context: Global / Default
-        const ids = (root.userConfig && Array.isArray(root.userConfig.globalSlices))
-            ? root.userConfig.globalSlices
-            : ["scratchpad", "terminal", "wallpapers", "btop", "session", "filejump", "calc"]
+        // Main Slices for context
+        const ids = getActiveSliceIds(context)
+        const winAddr = win?.address || ""
+        const wsVal = win?.workspace
+        const wsId = (typeof wsVal === "object" && wsVal !== null)
+            ? String(wsVal.name || wsVal.id || "")
+            : String(wsVal || win?.workspaceId || "")
 
         return ids.map((fnId, slotIdx) => {
             if (fnId === "scratchpad") {
@@ -1356,6 +1415,63 @@ except Exception:
                 sp.functionId = "scratchpad"
                 return sp
             }
+            if (fnId === "browsertabs") {
+                let tabCount = 0
+                if (typeof GlobalStates !== "undefined" && GlobalStates && GlobalStates.browserTabsList) {
+                    tabCount = GlobalStates.browserTabsList.length
+                }
+                const tabSliceLabel = tabCount > 0 ? ('Switch Tab (' + tabCount + ')') : "Switch Tab"
+                return {
+                    slotIndex: slotIdx,
+                    functionId: "browsertabs",
+                    label: tabSliceLabel,
+                    icon: "tabs",
+                    hasSubTier: true,
+                    subTierType: "browsertabs",
+                    action: null
+                }
+            }
+            if (fnId === "browser_new_tab") {
+                return {
+                    slotIndex: slotIdx,
+                    functionId: fnId,
+                    label: "New Tab",
+                    icon: "tab",
+                    hasSubTier: false,
+                    action: () => sendBrowserKey(winAddr, "wtype -M ctrl -k t -m ctrl", wsId)
+                }
+            }
+            if (fnId === "browser_close_tab") {
+                return {
+                    slotIndex: slotIdx,
+                    functionId: fnId,
+                    label: "Close Tab",
+                    icon: "tab_close",
+                    hasSubTier: false,
+                    action: () => sendBrowserKey(winAddr, "wtype -M ctrl -k w -m ctrl", wsId)
+                }
+            }
+            if (fnId === "browser_dup_tab") {
+                return {
+                    slotIndex: slotIdx,
+                    functionId: fnId,
+                    label: "Duplicate Tab",
+                    icon: "tab_duplicate",
+                    hasSubTier: false,
+                    action: () => sendBrowserKey(winAddr, "wtype -M alt -k d -m alt && sleep 0.08 && wtype -M alt -k Return -m alt", wsId)
+                }
+            }
+            if (fnId === "browser_reopen_tab") {
+                return {
+                    slotIndex: slotIdx,
+                    functionId: fnId,
+                    label: "Reopen Tab",
+                    icon: "history",
+                    hasSubTier: false,
+                    action: () => sendBrowserKey(winAddr, "wtype -M ctrl -M shift -k t -m shift -m ctrl", wsId)
+                }
+            }
+
             const def = root.functionRegistry[fnId]
             if (!def) {
                 return {

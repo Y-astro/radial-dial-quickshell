@@ -4,6 +4,7 @@ import Quickshell
 import Quickshell.Wayland
 import Quickshell.Hyprland
 import Quickshell.Io
+import qs.modules.common
 
 // ─────────────────────────────────────────────────────────────────────────────
 // RadialMenu — Transparent overlay window loader with active keyboard focus
@@ -26,22 +27,17 @@ Scope {
     readonly property real posY: hasGlobalStates ? GlobalStates.radialMenuY : internalY
     readonly property var  targetScreen: hasGlobalStates ? (GlobalStates.radialMenuScreen ?? Quickshell.screens[0]) : (internalScreen ?? Quickshell.screens[0])
 
-    // Built-in GlobalShortcut for standalone Quickshell environments
-    GlobalShortcut {
-        name: "radialMenu"
-        description: "Open radial pie menu at cursor"
-        onPressed: {
-            if (root.isMenuOpen) {
-                if (root.hasGlobalStates) {
-                    GlobalStates.radialMenuCloseRequested()
-                } else {
-                    root.internalOpen = false
+    // Built-in GlobalShortcut for standalone Quickshell environments (disabled when GlobalStates is present)
+    Loader {
+        active: !root.hasGlobalStates
+        sourceComponent: GlobalShortcut {
+            name: "radialMenu"
+            description: "Open radial pie menu at cursor"
+            onPressed: {
+                if (root.isMenuOpen) {
+                    root.closeMenu()
+                    return
                 }
-                return
-            }
-            if (root.hasGlobalStates) {
-                GlobalStates.radialMenuOpen = true
-            } else {
                 cursorReaderProc.running = true
             }
         }
@@ -83,6 +79,13 @@ Scope {
         }
     }
 
+    function closeMenu() {
+        if (root.hasGlobalStates) {
+            GlobalStates.radialMenuOpen = false
+        }
+        root.internalOpen = false
+    }
+
     Loader {
         id: menuLoader
         active: root.isMenuOpen
@@ -97,7 +100,7 @@ Scope {
 
             WlrLayershell.namespace: "quickshell:radialMenu"
             WlrLayershell.layer: WlrLayer.Overlay
-            WlrLayershell.keyboardFocus: WlrKeyboardFocus.Exclusive
+            WlrLayershell.keyboardFocus: (radialContent && !radialContent.isClosing) ? WlrKeyboardFocus.Exclusive : WlrKeyboardFocus.None
 
             anchors {
                 top: true
@@ -109,20 +112,21 @@ Scope {
             Connections {
                 target: root.hasGlobalStates ? GlobalStates : null
                 function onRadialMenuCloseRequested() {
-                    radialContent.closeAnimated()
+                    radialContent.closeAnimated(() => root.closeMenu())
                 }
             }
 
             // Click outside the dial closes the menu with outside-to-inside animation
             MouseArea {
                 anchors.fill: parent
+                enabled: radialContent ? !radialContent.isClosing : true
                 acceptedButtons: Qt.LeftButton | Qt.RightButton | Qt.MiddleButton
                 onClicked: {
-                    if (root.hasGlobalStates) {
-                        radialContent.closeAnimated()
-                    } else {
-                        radialContent.closeAnimated(() => { root.internalOpen = false })
+                    if (radialContent && radialContent.isCustomizerActive) {
+                        radialContent.closeCustomizer()
+                        return
                     }
+                    radialContent.closeAnimated(() => root.closeMenu())
                 }
             }
 
@@ -132,6 +136,7 @@ Scope {
                 centerY: root.posY
                 contextWindow: root.hasGlobalStates ? GlobalStates.radialMenuContextWindow : root.internalContextWin
                 focus: true
+                onMenuClosed: root.closeMenu()
             }
         }
     }

@@ -2,6 +2,7 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Layouts
 import Quickshell
+import qs.modules.common
 
 // ─────────────────────────────────────────────────────────────────────────────
 // RadialMenuContent — Localized Symmetrical Petal Fan Radial Menu
@@ -22,7 +23,15 @@ Item {
 
     property var contextWindow: (typeof GlobalStates !== "undefined" && GlobalStates) ? GlobalStates.radialMenuContextWindow : null
 
+    signal menuClosed()
+    readonly property bool isClosing: collapseAnimation.running
+
     focus: true
+
+    readonly property bool isCustomizerActive: customizer ? customizer.active : false
+    function closeCustomizer() {
+        if (customizer) customizer.close()
+    }
 
     // Context & Main Slices
     property string activeContext: RadialMenuActions.resolveContext(root.contextWindow)
@@ -333,28 +342,28 @@ Item {
                 target: root
                 property: "subRevealProgress"
                 to: 0.0
-                duration: 100
+                duration: 70
                 easing.type: Easing.InQuad
             }
             NumberAnimation {
                 target: root
                 property: "revealProgress"
                 to: 0.0
-                duration: Math.max(120, root.sliceCount * 24)
+                duration: 90
                 easing.type: Easing.InCubic
             }
             NumberAnimation {
                 target: root
                 property: "scale"
-                to: 0.82
-                duration: Math.max(130, root.sliceCount * 24 + 20)
+                to: 0.85
+                duration: 90
                 easing.type: Easing.InQuad
             }
             NumberAnimation {
                 target: root
                 property: "opacity"
                 to: 0.0
-                duration: Math.max(130, root.sliceCount * 24 + 20)
+                duration: 90
                 easing.type: Easing.InQuad
             }
         }
@@ -364,14 +373,17 @@ Item {
             target: root
             property: "hubScale"
             to: 0.0
-            duration: 80
-            easing.type: Easing.InBack
-            easing.overshoot: 1.2
+            duration: 50
+            easing.type: Easing.InQuad
         }
 
         ScriptAction {
             script: {
-                if (typeof GlobalStates !== "undefined") GlobalStates.radialMenuOpen = false
+                root.menuClosed()
+                if (typeof GlobalStates !== "undefined" && GlobalStates) {
+                    GlobalStates.radialMenuOpen = false
+                }
+                root.flickModeArmed = false
                 if (typeof root.pendingAction === "function") {
                     const act = root.pendingAction
                     root.pendingAction = null
@@ -436,8 +448,8 @@ Item {
     }
 
     Keys.onReleased: (event) => {
-        // Guard 1: Never trigger or close if customizer or folderBrowser is active
-        if (customizer.active || folderBrowser.active) {
+        // Guard 1: Never trigger or close if customizer is active
+        if (customizer.active) {
             return
         }
         // Guard 2: Never trigger or close if sub-tier is open
@@ -516,9 +528,17 @@ Item {
         }
     }
 
-    // ── Canvas: GPU-Accelerated Concentric Floating Wedges ────────────────────
-    Canvas {
-        id: pieCanvas
+    // ── Concentric Radial Dial Visuals Container (Fades out when Customizer is open) ──
+    Item {
+        id: dialContainer
+        anchors.fill: parent
+        opacity: (customizer && customizer.active) ? 0.0 : 1.0
+        visible: opacity > 0.001
+        Behavior on opacity { NumberAnimation { duration: 160; easing.type: Easing.OutCubic } }
+
+        // ── Canvas: GPU-Accelerated Concentric Floating Wedges ────────────────────
+        Canvas {
+            id: pieCanvas
         anchors.fill: parent
         renderTarget: Canvas.FramebufferObject
 
@@ -1365,6 +1385,7 @@ Item {
             Behavior on opacity { NumberAnimation { duration: 80 } }
         }
     }
+}
 
     // ── 5. Configuration Synchronization ────────────────────────────────────
     Connections {

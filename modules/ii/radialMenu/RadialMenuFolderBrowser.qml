@@ -41,13 +41,20 @@ Item {
     property color colOnSurface: (typeof Appearance !== "undefined" && Appearance.colors && Appearance.colors.colOnSurface) ? Appearance.colors.colOnSurface : Qt.rgba(0.90, 0.90, 0.93, 1.0)
     property color colSubtext: (typeof Appearance !== "undefined" && Appearance.colors && Appearance.colors.colSubtext) ? Appearance.colors.colSubtext : Qt.rgba(0.70, 0.70, 0.75, 0.8)
     property color colSurfaceContainer: (typeof Appearance !== "undefined" && Appearance.colors && (Appearance.colors.colSurfaceContainerHigh || Appearance.colors.colSurfaceContainer || Appearance.colors.colLayer1)) ? (Appearance.colors.colSurfaceContainerHigh || Appearance.colors.colSurfaceContainer || Appearance.colors.colLayer1) : Qt.rgba(0.09, 0.09, 0.13, 0.98)
+    readonly property color colSurfaceBase: {
+        if (typeof Appearance !== "undefined" && Appearance.m3colors && Appearance.m3colors.m3surfaceContainer) {
+            return Appearance.m3colors.m3surfaceContainer
+        }
+        return Qt.rgba(0.08, 0.08, 0.12, 1.0)
+    }
     property color colOutline: (typeof Appearance !== "undefined" && Appearance.colors && (Appearance.colors.colOutlineVariant || Appearance.colors.colOutline)) ? (Appearance.colors.colOutlineVariant || Appearance.colors.colOutline) : Qt.rgba(1.0, 1.0, 1.0, 0.14)
     property color colLayer2: (typeof Appearance !== "undefined" && Appearance.colors && Appearance.colors.colLayer2) ? Appearance.colors.colLayer2 : Qt.rgba(0.14, 0.14, 0.18, 0.9)
     property color colLayer0: (typeof Appearance !== "undefined" && Appearance.colors && Appearance.colors.colLayer0) ? Appearance.colors.colLayer0 : Qt.rgba(0.06, 0.06, 0.08, 0.5)
     property string fontMain: (typeof Appearance !== "undefined" && Appearance.font && Appearance.font.family && Appearance.font.family.main) ? Appearance.font.family.main : "sans-serif"
     property string fontIcon: (typeof Appearance !== "undefined" && Appearance.font && Appearance.font.family && Appearance.font.family.iconMaterial) ? Appearance.font.family.iconMaterial : "Material Symbols Rounded"
 
-    visible: opacity > 0.001
+    enabled: active
+    visible: active || opacity > 0.001
     opacity: active ? 1.0 : 0.0
     scale: active ? 1.0 : 0.94
 
@@ -123,9 +130,10 @@ Item {
         root.active = false
     }
 
-    // Catch backdrop clicks
+    // Invisible backdrop area: catch clicks outside modal card to close
     MouseArea {
         anchors.fill: parent
+        enabled: root.active
         acceptedButtons: Qt.LeftButton | Qt.RightButton
         onClicked: root.close()
     }
@@ -138,16 +146,38 @@ Item {
         return root.folders.filter(f => f.name.toLowerCase().includes(q))
     }
 
-    // Main Modal Card Window
+    // Main Modal Card Window — Frosted glass with subtle wallpaper-accent tint
     Rectangle {
         id: card
-        width: Math.min(parent.width - 32, 560)
-        height: Math.min(parent.height - 40, 580)
+        width: 480
+        height: 540
         anchors.centerIn: parent
         radius: 22
-        color: root.colSurfaceContainer
-        border.color: root.colOutline
+        clip: true
+
+        gradient: Gradient {
+            GradientStop {
+                position: 0.0
+                color: Qt.rgba(root.colSurfaceBase.r * 1.08, root.colSurfaceBase.g * 1.08, root.colSurfaceBase.b * 1.08, 0.82)
+            }
+            GradientStop {
+                position: 1.0
+                color: Qt.rgba(root.colSurfaceBase.r * 0.92, root.colSurfaceBase.g * 0.92, root.colSurfaceBase.b * 0.92, 0.88)
+            }
+        }
+        border.color: Qt.rgba(1.0, 1.0, 1.0, 0.18)
         border.width: 1.5
+
+        // Top frosted highlight reflection
+        Rectangle {
+            anchors.top: parent.top
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.margins: 1
+            height: 1
+            radius: card.radius
+            color: Qt.rgba(1.0, 1.0, 1.0, 0.18)
+        }
 
         // Prevent click-through
         MouseArea {
@@ -239,8 +269,8 @@ Item {
                 Layout.fillWidth: true
                 height: 38
                 radius: 10
-                color: root.colLayer2
-                border.color: root.colOutline
+                color: Qt.rgba(0.0, 0.0, 0.0, 0.30)
+                border.color: Qt.rgba(1.0, 1.0, 1.0, 0.12)
                 border.width: 1
 
                 RowLayout {
@@ -316,6 +346,7 @@ Item {
                     clip: true
                     boundsBehavior: Flickable.StopAtBounds
                     model: root.places
+                    footer: Item { width: 24; height: 1 }
 
                     WheelHandler {
                         target: placesList
@@ -353,13 +384,13 @@ Item {
                         color: isSelected
                             ? root.colPrimary
                             : (placeHover.hovered
-                                ? Qt.rgba(root.colPrimary.r, root.colPrimary.g, root.colPrimary.b, 0.18)
-                                : root.colLayer2)
+                                ? Qt.rgba(root.colPrimary.r, root.colPrimary.g, root.colPrimary.b, 0.22)
+                                : Qt.rgba(1.0, 1.0, 1.0, 0.08))
                         border.color: isSelected
                             ? root.colPrimary
                             : (placeHover.hovered
                                 ? Qt.rgba(root.colPrimary.r, root.colPrimary.g, root.colPrimary.b, 0.40)
-                                : root.colOutline)
+                                : Qt.rgba(1.0, 1.0, 1.0, 0.14))
                         border.width: 1
 
                         RowLayout {
@@ -398,7 +429,7 @@ Item {
                     z: 5
                     gradient: Gradient {
                         orientation: Gradient.Horizontal
-                        GradientStop { position: 0.0; color: root.colSurfaceContainer }
+                        GradientStop { position: 0.0; color: Qt.rgba(root.colSurfaceBase.r, root.colSurfaceBase.g, root.colSurfaceBase.b, 0.90) }
                         GradientStop { position: 1.0; color: "transparent" }
                     }
                 }
@@ -414,7 +445,7 @@ Item {
                     gradient: Gradient {
                         orientation: Gradient.Horizontal
                         GradientStop { position: 0.0; color: "transparent" }
-                        GradientStop { position: 1.0; color: root.colSurfaceContainer }
+                        GradientStop { position: 1.0; color: Qt.rgba(root.colSurfaceBase.r, root.colSurfaceBase.g, root.colSurfaceBase.b, 0.90) }
                     }
                 }
             }
@@ -424,8 +455,8 @@ Item {
                 Layout.fillWidth: true
                 height: 34
                 radius: 10
-                color: root.colLayer2
-                border.color: filterBox.activeFocus ? root.colPrimary : root.colOutline
+                color: Qt.rgba(0.0, 0.0, 0.0, 0.30)
+                border.color: filterBox.activeFocus ? root.colPrimary : Qt.rgba(1.0, 1.0, 1.0, 0.14)
                 border.width: 1
 
                 RowLayout {
@@ -482,8 +513,8 @@ Item {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 radius: 12
-                color: root.colLayer0
-                border.color: root.colOutline
+                color: Qt.rgba(0.0, 0.0, 0.0, 0.32)
+                border.color: Qt.rgba(1.0, 1.0, 1.0, 0.12)
                 border.width: 1
                 clip: true
 
@@ -502,7 +533,7 @@ Item {
                         width: folderListView.width - 8
                         height: 38
                         radius: 8
-                        color: itemHover.hovered ? Qt.rgba(root.colPrimary.r, root.colPrimary.g, root.colPrimary.b, 0.15) : "transparent"
+                        color: itemHover.hovered ? Qt.rgba(root.colPrimary.r, root.colPrimary.g, root.colPrimary.b, 0.18) : "transparent"
 
                         RowLayout {
                             anchors.fill: parent
@@ -574,8 +605,8 @@ Item {
                     width: 90
                     height: 40
                     radius: 10
-                    color: cancelHover.hovered ? Qt.rgba(1.0, 1.0, 1.0, 0.14) : Qt.rgba(1.0, 1.0, 1.0, 0.08)
-                    border.color: root.colOutline
+                    color: cancelHover.hovered ? Qt.rgba(1.0, 1.0, 1.0, 0.16) : Qt.rgba(1.0, 1.0, 1.0, 0.08)
+                    border.color: Qt.rgba(1.0, 1.0, 1.0, 0.16)
                     border.width: 1
 
                     StyledText {

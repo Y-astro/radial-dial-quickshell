@@ -1,4 +1,5 @@
 import QtQuick
+import qs.modules.common
 
 Text {
     id: root

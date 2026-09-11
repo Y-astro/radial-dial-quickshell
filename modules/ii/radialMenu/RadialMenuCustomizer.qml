@@ -4,6 +4,7 @@ import QtQuick.Layouts
 import QtQuick.Controls
 import QtQuick.Controls.Material
 import Quickshell
+import qs.modules.common
 
 // ─────────────────────────────────────────────────────────────────────────────
 // RadialMenuCustomizer — Interactive In-Menu Segment Customizer & File Manager
@@ -34,21 +35,29 @@ Item {
     readonly property color colOnSurface: (typeof Appearance !== "undefined" && Appearance.colors) ? Appearance.colors.colOnSurface : Qt.rgba(0.90, 0.90, 0.93, 1.0)
     readonly property color colSubtext: (typeof Appearance !== "undefined" && Appearance.colors && Appearance.colors.colSubtext) ? Appearance.colors.colSubtext : Qt.rgba(0.70, 0.70, 0.75, 0.8)
     readonly property color colSurfaceContainer: (typeof Appearance !== "undefined" && Appearance.colors && Appearance.colors.colSurfaceContainerHigh) ? Appearance.colors.colSurfaceContainerHigh : Qt.rgba(0.09, 0.09, 0.13, 0.96)
+    readonly property color colSurfaceBase: {
+        if (typeof Appearance !== "undefined" && Appearance.m3colors && Appearance.m3colors.m3surfaceContainer) {
+            return Appearance.m3colors.m3surfaceContainer
+        }
+        return Qt.rgba(0.08, 0.08, 0.12, 1.0)
+    }
     readonly property color colOutline: (typeof Appearance !== "undefined" && Appearance.colors) ? Appearance.colors.colOutline : Qt.rgba(1.0, 1.0, 1.0, 0.14)
     readonly property string fontMain: (typeof Appearance !== "undefined" && Appearance.font) ? Appearance.font.family.main : "sans-serif"
     readonly property string fontIcon: (typeof Appearance !== "undefined" && Appearance.font) ? Appearance.font.family.iconMaterial : "Material Symbols Rounded"
 
     anchors.fill: parent
-    visible: opacity > 0.001
+    enabled: active
+    visible: active || opacity > 0.001
     opacity: active ? 1.0 : 0.0
     scale: active ? 1.0 : 0.92
 
     Behavior on opacity { NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }
     Behavior on scale { NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }
 
-    // Close on clicking backdrop
+    // Invisible backdrop area: catch clicks outside modal card to close
     MouseArea {
         anchors.fill: parent
+        enabled: root.active
         acceptedButtons: Qt.LeftButton | Qt.RightButton
         onClicked: root.close()
     }
@@ -71,7 +80,7 @@ Item {
         }
     }
 
-    function openSwapFunction(context: string, slotIndex: int, currentFnId: string) {
+    function openSwapFunction(context, slotIndex, currentFnId) {
         root.mode = "swap"
         root.targetContext = context || "default"
         root.targetSlotIndex = slotIndex
@@ -82,7 +91,7 @@ Item {
         root.active = true
     }
 
-    function openEditFileTarget(targetIndex: int, label: string, path: string, iconName: string) {
+    function openEditFileTarget(targetIndex, label, path, iconName) {
         root.mode = "file_edit"
         root.fileTargetIndex = targetIndex
         root.fileTargetLabel = label || ""
@@ -108,17 +117,45 @@ Item {
         root.active = false
     }
 
-    // Main Modal Card
+    // Main Modal Card — Frosted glass with subtle wallpaper-accent tint
     Rectangle {
         id: card
         width: 480
         height: 540
         anchors.centerIn: parent
         radius: 22
-        color: Qt.rgba(0.09, 0.09, 0.13, 0.96)
-        border.color: Qt.rgba(1.0, 1.0, 1.0, 0.14)
-        border.width: 1.5
         clip: true
+
+        // Smooth transition when folder browser is active to avoid overlapping text bleed
+        opacity: (root.active && !folderBrowser.active) ? 1.0 : 0.0
+        scale: folderBrowser.active ? 0.95 : 1.0
+        visible: opacity > 0.001
+        Behavior on opacity { NumberAnimation { duration: 160; easing.type: Easing.OutCubic } }
+        Behavior on scale { NumberAnimation { duration: 160; easing.type: Easing.OutCubic } }
+
+        gradient: Gradient {
+            GradientStop {
+                position: 0.0
+                color: Qt.rgba(root.colSurfaceBase.r * 1.08, root.colSurfaceBase.g * 1.08, root.colSurfaceBase.b * 1.08, 0.82)
+            }
+            GradientStop {
+                position: 1.0
+                color: Qt.rgba(root.colSurfaceBase.r * 0.92, root.colSurfaceBase.g * 0.92, root.colSurfaceBase.b * 0.92, 0.88)
+            }
+        }
+        border.color: Qt.rgba(1.0, 1.0, 1.0, 0.18)
+        border.width: 1.5
+
+        // Top frosted highlight reflection
+        Rectangle {
+            anchors.top: parent.top
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.margins: 1
+            height: 1
+            radius: card.radius
+            color: Qt.rgba(1.0, 1.0, 1.0, 0.18)
+        }
 
         // Catch clicks inside modal
         MouseArea {
@@ -234,8 +271,8 @@ Item {
                     Layout.fillWidth: true
                     height: 34
                     radius: 10
-                    color: Qt.rgba(0.14, 0.14, 0.18, 0.8)
-                    border.color: Qt.rgba(1.0, 1.0, 1.0, 0.12)
+                    color: Qt.rgba(0.0, 0.0, 0.0, 0.30)
+                    border.color: searchInput.activeFocus ? root.colPrimary : Qt.rgba(1.0, 1.0, 1.0, 0.14)
                     border.width: 1
 
                     RowLayout {
@@ -247,7 +284,7 @@ Item {
                         MaterialSymbol {
                             text: "search"
                             iconSize: 16
-                            color: Qt.rgba(1.0, 1.0, 1.0, 0.4)
+                            color: searchInput.activeFocus ? root.colPrimary : Qt.rgba(1.0, 1.0, 1.0, 0.4)
                         }
 
                         TextInput {
@@ -310,8 +347,8 @@ Item {
                         width: fnList.width
                         height: 52
                         radius: 12
-                        color: fnHover.hovered ? Qt.rgba(1.0, 1.0, 1.0, 0.08) : (isActiveInDial ? Qt.rgba(root.colPrimary.r, root.colPrimary.g, root.colPrimary.b, 0.10) : "transparent")
-                        border.color: isActiveInDial ? Qt.rgba(root.colPrimary.r, root.colPrimary.g, root.colPrimary.b, 0.45) : "transparent"
+                        color: fnHover.hovered ? Qt.rgba(1.0, 1.0, 1.0, 0.10) : (isActiveInDial ? Qt.rgba(root.colPrimary.r, root.colPrimary.g, root.colPrimary.b, 0.14) : Qt.rgba(0.0, 0.0, 0.0, 0.20))
+                        border.color: isActiveInDial ? root.colPrimary : (fnHover.hovered ? Qt.rgba(1.0, 1.0, 1.0, 0.20) : Qt.rgba(1.0, 1.0, 1.0, 0.08))
                         border.width: 1
 
                         RowLayout {
@@ -489,8 +526,8 @@ Item {
                         Layout.fillWidth: true
                         height: 38
                         radius: 10
-                        color: Qt.rgba(0.14, 0.14, 0.18, 0.8)
-                        border.color: Qt.rgba(1.0, 1.0, 1.0, 0.14)
+                        color: Qt.rgba(0.0, 0.0, 0.0, 0.30)
+                        border.color: targetLabelInput.activeFocus ? root.colPrimary : Qt.rgba(1.0, 1.0, 1.0, 0.14)
                         border.width: 1
 
                         TextInput {
@@ -534,8 +571,8 @@ Item {
                             Layout.fillWidth: true
                             height: 38
                             radius: 10
-                            color: Qt.rgba(0.14, 0.14, 0.18, 0.8)
-                            border.color: Qt.rgba(1.0, 1.0, 1.0, 0.14)
+                            color: Qt.rgba(0.0, 0.0, 0.0, 0.30)
+                            border.color: targetPathInput.activeFocus ? root.colPrimary : Qt.rgba(1.0, 1.0, 1.0, 0.14)
                             border.width: 1
 
                             TextInput {
@@ -564,8 +601,8 @@ Item {
                             width: 90
                             height: 38
                             radius: 10
-                            color: browseHover.hovered ? Qt.rgba(1.0, 1.0, 1.0, 0.15) : Qt.rgba(1.0, 1.0, 1.0, 0.08)
-                            border.color: Qt.rgba(1.0, 1.0, 1.0, 0.20)
+                            color: browseHover.hovered ? Qt.rgba(root.colPrimary.r, root.colPrimary.g, root.colPrimary.b, 0.22) : Qt.rgba(1.0, 1.0, 1.0, 0.08)
+                            border.color: browseHover.hovered ? root.colPrimary : Qt.rgba(1.0, 1.0, 1.0, 0.18)
                             border.width: 1
 
                             RowLayout {
@@ -692,8 +729,8 @@ Item {
                         width: 80
                         height: 36
                         radius: 10
-                        color: cancelHover.hovered ? Qt.rgba(1.0, 1.0, 1.0, 0.12) : Qt.rgba(1.0, 1.0, 1.0, 0.05)
-                        border.color: Qt.rgba(1.0, 1.0, 1.0, 0.14)
+                        color: cancelHover.hovered ? Qt.rgba(1.0, 1.0, 1.0, 0.16) : Qt.rgba(1.0, 1.0, 1.0, 0.08)
+                        border.color: Qt.rgba(1.0, 1.0, 1.0, 0.16)
                         border.width: 1
 
                         StyledText {
@@ -771,6 +808,10 @@ Item {
             if (root.fileTargetLabel === "" || root.fileTargetLabel === "Folder") {
                 root.fileTargetLabel = name
             }
+            folderBrowser.active = false
+        }
+        onCancelled: {
+            folderBrowser.active = false
         }
     }
 }

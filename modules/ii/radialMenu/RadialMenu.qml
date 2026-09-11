@@ -109,10 +109,28 @@ Scope {
                 right: true
             }
 
+            Timer {
+                id: forceCloseSafetyTimer
+                interval: 280
+                repeat: false
+                onTriggered: {
+                    root.closeMenu()
+                }
+            }
+
             Connections {
                 target: root.hasGlobalStates ? GlobalStates : null
                 function onRadialMenuCloseRequested() {
-                    radialContent.closeAnimated(() => root.closeMenu())
+                    forceCloseSafetyTimer.restart()
+                    if (radialContent) {
+                        radialContent.closeAnimated(() => {
+                            forceCloseSafetyTimer.stop()
+                            root.closeMenu()
+                        })
+                    } else {
+                        forceCloseSafetyTimer.stop()
+                        root.closeMenu()
+                    }
                 }
             }
 
@@ -126,7 +144,16 @@ Scope {
                         radialContent.closeCustomizer()
                         return
                     }
-                    radialContent.closeAnimated(() => root.closeMenu())
+                    forceCloseSafetyTimer.restart()
+                    if (radialContent) {
+                        radialContent.closeAnimated(() => {
+                            forceCloseSafetyTimer.stop()
+                            root.closeMenu()
+                        })
+                    } else {
+                        forceCloseSafetyTimer.stop()
+                        root.closeMenu()
+                    }
                 }
             }
 
@@ -136,7 +163,10 @@ Scope {
                 centerY: root.posY
                 contextWindow: root.hasGlobalStates ? GlobalStates.radialMenuContextWindow : root.internalContextWin
                 focus: true
-                onMenuClosed: root.closeMenu()
+                onMenuClosed: {
+                    forceCloseSafetyTimer.stop()
+                    root.closeMenu()
+                }
             }
         }
     }

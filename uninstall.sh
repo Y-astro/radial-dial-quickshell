@@ -20,7 +20,40 @@ fi
 
 if [ -n "$QS_DIR" ] && [ -d "$QS_DIR/modules/ii/radialMenu" ]; then
     rm -rf "$QS_DIR/modules/ii/radialMenu"
-    echo -e "${GREEN}[✓] Removed radialMenu files.${RESET}"
+    echo -e "${GREEN}[*] Removed radialMenu files.${RESET}"
+fi
+
+# Remove native messaging host
+rm -f "$HOME/.mozilla/native-messaging-hosts/radial_tabs.json" 2>/dev/null || true
+rm -f "$HOME/.config/mozilla/native-messaging-hosts/radial_tabs.json" 2>/dev/null || true
+rm -f "/tmp/radial_tabs_cache.json" "/tmp/radial_gpu_profile.json" 2>/dev/null || true
+
+# Remove GlobalStates.qml patches
+GLOBAL_STATES="$QS_DIR/GlobalStates.qml"
+if [ -f "$GLOBAL_STATES" ]; then
+    python3 -c "
+import re
+with open('$GLOBAL_STATES', 'r') as f:
+    content = f.read()
+if 'radialMenuOpen' in content:
+    content = re.sub(r'\s*// Radial menu state[\s\S]*?// <<< END RADIAL_MENU <<<', '', content)
+    content = re.sub(r'\s*// Radial menu state[\s\S]*?(?=property bool|property var|signal [a-zA-Z]|$)', '', content)
+    with open('$GLOBAL_STATES', 'w') as f:
+        f.write(content)
+" 2>/dev/null || true
+fi
+
+# Remove IllogicalImpulseFamily.qml instantiation
+II_FAMILY="$QS_DIR/panelFamilies/IllogicalImpulseFamily.qml"
+if [ -f "$II_FAMILY" ]; then
+    python3 -c "
+with open('$II_FAMILY', 'r') as f:
+    content = f.read()
+content = content.replace('import qs.modules.ii.radialMenu\n', '')
+content = content.replace('    RadialMenu {}\n', '')
+with open('$II_FAMILY', 'w') as f:
+    f.write(content)
+" 2>/dev/null || true
 fi
 
 # Remove Hyprland rules
@@ -44,4 +77,4 @@ if [ -n "$QS_DIR" ]; then
     qs -c "$(basename "$QS_DIR")" -d >/dev/null 2>&1 &
 fi
 
-echo -e "${GREEN}[✓] Uninstalled successfully.${RESET}"
+echo -e "${GREEN}[*] Uninstalled successfully.${RESET}"

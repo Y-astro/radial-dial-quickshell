@@ -101,4 +101,10 @@ if __name__ == '__main__':
     # 2. Fallback to sessionstore
     if not tabs:
         tabs = get_firefox_session_tabs()
+    if tabs:
+        try:
+            with open("/tmp/radial_tabs_cache.json", "w") as f:
+                json.dump(tabs, f)
+        except Exception:
+            pass
     print(json.dumps(tabs or []))

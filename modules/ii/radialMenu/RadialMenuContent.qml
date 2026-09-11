@@ -23,6 +23,10 @@ Item {
 
     property var contextWindow: (typeof GlobalStates !== "undefined" && GlobalStates) ? GlobalStates.radialMenuContextWindow : null
 
+    // Adaptive Performance Profile (Intel UHD / Integrated vs Dedicated GPU)
+    readonly property var gpuProfile: (typeof GlobalStates !== "undefined" && GlobalStates && GlobalStates.radialMenuGpuProfile) ? GlobalStates.radialMenuGpuProfile : null
+    readonly property bool isLowEndGpu: gpuProfile ? (gpuProfile.is_low_end ?? false) : false
+
     signal menuClosed()
     readonly property bool isClosing: collapseAnimation.running
 
@@ -151,7 +155,7 @@ Item {
         property: "subRevealProgress"
         from: 0.0
         to: Math.max(1, root.subSliceCount)
-        duration: Math.max(180, root.subSliceCount * 40)
+        duration: root.isLowEndGpu ? 80 : Math.max(180, root.subSliceCount * 40)
         easing.type: Easing.OutCubic
     }
 
@@ -164,7 +168,7 @@ Item {
             target: root
             property: "subRevealProgress"
             to: 0.0
-            duration: Math.max(130, root.subSliceCount * 26)
+            duration: root.isLowEndGpu ? 50 : Math.max(130, root.subSliceCount * 26)
             easing.type: Easing.InCubic
         }
 
@@ -181,10 +185,20 @@ Item {
     onHoveredIndexChanged: {
         if (hoveredIndex >= 0) {
             hoverSpringAnim.stop()
-            hoverFactor = 0.0
-            hoverSpringAnim.restart()
+            if (root.isLowEndGpu) {
+                hoverFactor = 1.0
+                pieCanvas.requestPaint()
+            } else {
+                hoverFactor = 0.0
+                hoverSpringAnim.restart()
+            }
         } else {
-            hoverFadeAnim.restart()
+            if (root.isLowEndGpu) {
+                hoverFactor = 0.0
+                pieCanvas.requestPaint()
+            } else {
+                hoverFadeAnim.restart()
+            }
         }
     }
 
@@ -211,10 +225,20 @@ Item {
     onOuterHoveredIndexChanged: {
         if (outerHoveredIndex >= 0) {
             outerHoverSpringAnim.stop()
-            outerHoverFactor = 0.0
-            outerHoverSpringAnim.restart()
+            if (root.isLowEndGpu) {
+                outerHoverFactor = 1.0
+                pieCanvas.requestPaint()
+            } else {
+                outerHoverFactor = 0.0
+                outerHoverSpringAnim.restart()
+            }
         } else {
-            outerHoverFadeAnim.restart()
+            if (root.isLowEndGpu) {
+                outerHoverFactor = 0.0
+                pieCanvas.requestPaint()
+            } else {
+                outerHoverFadeAnim.restart()
+            }
         }
     }
 
@@ -276,9 +300,9 @@ Item {
             property: "hubScale"
             from: 0.0
             to: 1.0
-            duration: 150
+            duration: root.isLowEndGpu ? 50 : 150
             easing.type: Easing.OutBack
-            easing.overshoot: 1.3
+            easing.overshoot: root.isLowEndGpu ? 1.0 : 1.3
         }
 
         // Step 2: Outer floating slices blossom out one by one clockwise
@@ -287,7 +311,7 @@ Item {
             property: "revealProgress"
             from: 0.0
             to: Math.max(1, root.sliceCount)
-            duration: Math.max(220, root.sliceCount * 45)
+            duration: root.isLowEndGpu ? 70 : Math.max(220, root.sliceCount * 45)
             easing.type: Easing.OutCubic
         }
     }
@@ -342,28 +366,28 @@ Item {
                 target: root
                 property: "subRevealProgress"
                 to: 0.0
-                duration: 70
+                duration: root.isLowEndGpu ? 30 : 70
                 easing.type: Easing.InQuad
             }
             NumberAnimation {
                 target: root
                 property: "revealProgress"
                 to: 0.0
-                duration: 90
+                duration: root.isLowEndGpu ? 40 : 90
                 easing.type: Easing.InCubic
             }
             NumberAnimation {
                 target: root
                 property: "scale"
                 to: 0.85
-                duration: 90
+                duration: root.isLowEndGpu ? 40 : 90
                 easing.type: Easing.InQuad
             }
             NumberAnimation {
                 target: root
                 property: "opacity"
                 to: 0.0
-                duration: 90
+                duration: root.isLowEndGpu ? 40 : 90
                 easing.type: Easing.InQuad
             }
         }
@@ -373,7 +397,7 @@ Item {
             target: root
             property: "hubScale"
             to: 0.0
-            duration: 50
+            duration: root.isLowEndGpu ? 20 : 50
             easing.type: Easing.InQuad
         }
 
@@ -539,38 +563,38 @@ Item {
         // ── Canvas: GPU-Accelerated Concentric Floating Wedges ────────────────────
         Canvas {
             id: pieCanvas
-        anchors.fill: parent
-        renderTarget: Canvas.FramebufferObject
+            anchors.fill: parent
+            renderTarget: root.isLowEndGpu ? Canvas.Image : Canvas.FramebufferObject
 
-        property int _hov: root.hoveredIndex
-        property real _hovFactor: root.hoverFactor
-        property real _rev: root.revealProgress
-        property color _primary: root.colPrimary
+            property int _hov: root.hoveredIndex
+            property real _hovFactor: root.hoverFactor
+            property real _rev: root.revealProgress
+            property color _primary: root.colPrimary
 
-        property string _subTier: root.activeSubTier
-        property real _subRev: root.subRevealProgress
-        property int _outerHov: root.outerHoveredIndex
-        property real _outerHovFactor: root.outerHoverFactor
-        property int _parentIdx: root.parentSliceIndex
+            property string _subTier: root.activeSubTier
+            property real _subRev: root.subRevealProgress
+            property int _outerHov: root.outerHoveredIndex
+            property real _outerHovFactor: root.outerHoverFactor
+            property int _parentIdx: root.parentSliceIndex
 
-        property bool _isDragging: root.isDraggingSlice
-        property int _dragFrom: root.dragFromIndex
-        property int _dragTarget: root.dragTargetIndex
+            property bool _isDragging: root.isDraggingSlice
+            property int _dragFrom: root.dragFromIndex
+            property int _dragTarget: root.dragTargetIndex
 
-        on_IsDraggingChanged: requestPaint()
-        on_DragFromChanged: requestPaint()
-        on_DragTargetChanged: requestPaint()
+            on_IsDraggingChanged: requestPaint()
+            on_DragFromChanged: requestPaint()
+            on_DragTargetChanged: requestPaint()
 
-        on_HovChanged: requestPaint()
-        on_HovFactorChanged: requestPaint()
-        on_RevChanged: requestPaint()
-        on_PrimaryChanged: requestPaint()
+            on_HovChanged: requestPaint()
+            on_HovFactorChanged: { if (!root.isLowEndGpu) requestPaint() }
+            on_RevChanged: requestPaint()
+            on_PrimaryChanged: requestPaint()
 
-        on_SubTierChanged: requestPaint()
-        on_SubRevChanged: requestPaint()
-        on_OuterHovChanged: requestPaint()
-        on_OuterHovFactorChanged: requestPaint()
-        on_ParentIdxChanged: requestPaint()
+            on_SubTierChanged: requestPaint()
+            on_SubRevChanged: requestPaint()
+            on_OuterHovChanged: requestPaint()
+            on_OuterHovFactorChanged: { if (!root.isLowEndGpu) requestPaint() }
+            on_ParentIdxChanged: requestPaint()
 
         readonly property real gapPx: 8.5
 
@@ -782,8 +806,13 @@ Item {
                         cx, cy, root.sliceInnerRadius,
                         cx, cy, currentOuter
                     )
-                    grad.addColorStop(0.0, Qt.rgba(0.08, 0.08, 0.12, 0.44))
-                    grad.addColorStop(1.0, Qt.rgba(0.04, 0.04, 0.06, 0.34))
+                    if (root.isLowEndGpu) {
+                        grad.addColorStop(0.0, Qt.rgba(0.10, 0.11, 0.15, 0.88))
+                        grad.addColorStop(1.0, Qt.rgba(0.06, 0.07, 0.10, 0.82))
+                    } else {
+                        grad.addColorStop(0.0, Qt.rgba(0.08, 0.08, 0.12, 0.44))
+                        grad.addColorStop(1.0, Qt.rgba(0.04, 0.04, 0.06, 0.34))
+                    }
 
                     ctx.fillStyle = grad
                     ctx.fill()
@@ -839,8 +868,13 @@ Item {
                             cx, cy, root.subInnerRadius,
                             cx, cy, currentSubOuter
                         )
-                        grad.addColorStop(0.0, Qt.rgba(0.12, 0.12, 0.16, 0.60))
-                        grad.addColorStop(1.0, Qt.rgba(0.06, 0.06, 0.09, 0.48))
+                        if (root.isLowEndGpu) {
+                            grad.addColorStop(0.0, Qt.rgba(0.12, 0.13, 0.18, 0.90))
+                            grad.addColorStop(1.0, Qt.rgba(0.08, 0.09, 0.13, 0.85))
+                        } else {
+                            grad.addColorStop(0.0, Qt.rgba(0.12, 0.12, 0.16, 0.60))
+                            grad.addColorStop(1.0, Qt.rgba(0.06, 0.06, 0.09, 0.48))
+                        }
 
                         ctx.fillStyle = grad
                         ctx.fill()
@@ -1202,16 +1236,16 @@ Item {
             opacity: isBeingDragged ? 0.35 : sliceProgress
             scale: isDropTarget ? 1.18 : (isBeingDragged ? 0.9 : sliceScale)
 
-            Behavior on scale { NumberAnimation { duration: 100 } }
-            Behavior on opacity { NumberAnimation { duration: 100 } }
+            Behavior on scale { enabled: !root.isLowEndGpu; NumberAnimation { duration: 100 } }
+            Behavior on opacity { enabled: !root.isLowEndGpu; NumberAnimation { duration: 100 } }
 
             width: 44
             height: 44
             x: Math.round(rawIconX - width / 2)
             y: Math.round(rawIconY - height / 2)
 
-            Behavior on x { NumberAnimation { duration: 110; easing.type: Easing.OutQuad } }
-            Behavior on y { NumberAnimation { duration: 110; easing.type: Easing.OutQuad } }
+            Behavior on x { enabled: !root.isLowEndGpu; NumberAnimation { duration: 110; easing.type: Easing.OutQuad } }
+            Behavior on y { enabled: !root.isLowEndGpu; NumberAnimation { duration: 110; easing.type: Easing.OutQuad } }
 
             // Material Symbol Icon
             MaterialSymbol {
@@ -1224,14 +1258,15 @@ Item {
                     : Qt.rgba(1.0, 1.0, 1.0, 0.95)
 
                 Behavior on iconSize {
+                    enabled: !root.isLowEndGpu
                     NumberAnimation {
                         duration: 120
                         easing.type: Easing.OutBack
                         easing.overshoot: 1.35
                     }
                 }
-                Behavior on color { ColorAnimation { duration: 90 } }
-                Behavior on fill { NumberAnimation { duration: 90 } }
+                Behavior on color { enabled: !root.isLowEndGpu; ColorAnimation { duration: 90 } }
+                Behavior on fill { enabled: !root.isLowEndGpu; NumberAnimation { duration: 90 } }
             }
             // Hotkey Number Badge (1..9)
             Rectangle {
@@ -1266,8 +1301,8 @@ Item {
                         : Qt.rgba(1.0, 1.0, 1.0, 0.85)
                 }
 
-                Behavior on color { ColorAnimation { duration: 80 } }
-                Behavior on border.color { ColorAnimation { duration: 80 } }
+                Behavior on color { enabled: !root.isLowEndGpu; ColorAnimation { duration: 80 } }
+                Behavior on border.color { enabled: !root.isLowEndGpu; ColorAnimation { duration: 80 } }
             }
         }
     }
@@ -1306,8 +1341,8 @@ Item {
             x: Math.round(rawIconX - width / 2)
             y: Math.round(rawIconY - height / 2)
 
-            Behavior on x { NumberAnimation { duration: 110; easing.type: Easing.OutQuad } }
-            Behavior on y { NumberAnimation { duration: 110; easing.type: Easing.OutQuad } }
+            Behavior on x { enabled: !root.isLowEndGpu; NumberAnimation { duration: 110; easing.type: Easing.OutQuad } }
+            Behavior on y { enabled: !root.isLowEndGpu; NumberAnimation { duration: 110; easing.type: Easing.OutQuad } }
 
             // Material Symbol Icon
             MaterialSymbol {
@@ -1320,14 +1355,15 @@ Item {
                     : Qt.rgba(1.0, 1.0, 1.0, 0.95)
 
                 Behavior on iconSize {
+                    enabled: !root.isLowEndGpu
                     NumberAnimation {
                         duration: 120
                         easing.type: Easing.OutBack
                         easing.overshoot: 1.35
                     }
                 }
-                Behavior on color { ColorAnimation { duration: 90 } }
-                Behavior on fill { NumberAnimation { duration: 90 } }
+                Behavior on color { enabled: !root.isLowEndGpu; ColorAnimation { duration: 90 } }
+                Behavior on fill { enabled: !root.isLowEndGpu; NumberAnimation { duration: 90 } }
             }
         }
     }
@@ -1342,8 +1378,8 @@ Item {
         color: root.centerHovered
             ? Qt.rgba(1.0, 1.0, 1.0, 0.22)
             : (root.activeHoverLabel !== ""
-                ? Qt.rgba(0.08, 0.08, 0.12, 0.65)
-                : Qt.rgba(0.06, 0.06, 0.08, 0.45))
+                ? (root.isLowEndGpu ? Qt.rgba(0.10, 0.11, 0.15, 0.92) : Qt.rgba(0.08, 0.08, 0.12, 0.65))
+                : (root.isLowEndGpu ? Qt.rgba(0.08, 0.08, 0.11, 0.85) : Qt.rgba(0.06, 0.06, 0.08, 0.45)))
         border.color: root.activeHoverLabel !== ""
             ? Qt.lighter(root.colPrimary, 1.25)
             : Qt.rgba(1.0, 1.0, 1.0, 0.22)
@@ -1352,8 +1388,8 @@ Item {
         scale: (root.hubScale >= 1.0) ? (root.centerHovered ? 1.06 : 1.0) : root.hubScale
         opacity: root.hubScale
 
-        Behavior on color { ColorAnimation { duration: 80 } }
-        Behavior on border.color { ColorAnimation { duration: 80 } }
+        Behavior on color { enabled: !root.isLowEndGpu; ColorAnimation { duration: 80 } }
+        Behavior on border.color { enabled: !root.isLowEndGpu; ColorAnimation { duration: 80 } }
 
         // 1. Close 'X' Icon (shown when no slice is hovered)
         MaterialSymbol {

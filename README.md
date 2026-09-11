@@ -50,6 +50,16 @@ chmod +x install.sh
 ./install.sh
 ```
 
+The installer automatically detects your GPU hardware capabilities:
+- **Dedicated GPU (Nvidia / AMD dGPU / Intel Arc)**: Configures Hyprland frosted glass layer blur and high-fidelity spring animations.
+- **Integrated / Low-End GPU (Intel UHD / HD / mobile APUs)**: Disables compositor-level fullscreen blur and enables the optimized low-power rendering profile for solid 60 FPS performance without frame drops.
+
+You can also explicitly specify your profile during installation:
+```bash
+./install.sh --low-end      # Force low-end / iGPU optimized mode
+./install.sh --high-perf    # Force dedicated GPU mode with full compositor blur
+```
+
 The installer detects your Quickshell configuration path, copies required modules, configures Hyprland layer rules, binds the shortcut, and registers the browser tab synchronization native messaging host.
 
 ### Default Keybinding
@@ -116,11 +126,27 @@ To install manually into `~/.config/quickshell/end4-pC/`:
 
 ## Configuration File
 
-Customizations are stored in JSON format at:
+Customizations and performance settings are stored in JSON format at:
 ```
 ~/.config/radialMenu/config.json
 ```
-Deleting this file restores default slices and settings.
+
+### Performance Profile Configuration (Optional)
+
+You can override the automatic GPU hardware detection by adding a `performance` block:
+```json
+{
+  "performance": {
+    "profile": "auto"
+  }
+}
+```
+Values for `profile`:
+- `"auto"`: Hardware detection based on `/sys/class/drm` and `lspci` (default).
+- `"low_end"`: Forces low-power optimizations, instant discrete canvas updates, simplified animation timers, and solid high-contrast wedge backgrounds.
+- `"high_performance"`: Forces high-fidelity mode with continuous spring animations and FramebufferObject rendering.
+
+Deleting `~/.config/radialMenu/config.json` restores default slices and settings.
 
 ---
 

@@ -46,29 +46,118 @@ def query_hypr_socket(cmd: str):
     except Exception:
         return None
 
-def get_cached_tabs():
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    tabs_script = os.path.join(script_dir, "get_browser_tabs.py")
-    if not os.path.exists(tabs_script):
-        return []
-    # Check cache freshness (500ms)
+def get_gpu_profile():
+    cache_path = "/tmp/radial_gpu_profile.json"
+    now = time.time()
+    if os.path.exists(cache_path):
+        try:
+            if now - os.path.getmtime(cache_path) < 3600:
+                with open(cache_path, "r") as f:
+                    return json.load(f)
+        except Exception:
+            pass
+
+    # Check user override in config.json
+    cfg_path = os.path.expanduser("~/.config/radialMenu/config.json")
+    forced_profile = None
+    if os.path.exists(cfg_path):
+        try:
+            with open(cfg_path, "r") as f:
+                cfg = json.load(f)
+                perf = cfg.get("performance", {})
+                forced_profile = perf.get("profile", "auto")
+        except Exception:
+            pass
+
+    if forced_profile in ("low", "low_end"):
+        profile = {
+            "is_low_end": True,
+            "has_discrete_gpu": False,
+            "gpu_acceleration": False,
+            "profile": "low_end",
+            "reason": "Config override: low_end"
+        }
+    elif forced_profile in ("high", "high_performance"):
+        profile = {
+            "is_low_end": False,
+            "has_discrete_gpu": True,
+            "gpu_acceleration": True,
+            "profile": "high_performance",
+            "reason": "Config override: high_performance"
+        }
+    else:
+        # Hardware auto-detection
+        import glob
+        drm_vendors = []
+        for vendor_path in glob.glob("/sys/class/drm/card[0-9]*/device/vendor"):
+            try:
+                with open(vendor_path, "r") as f:
+                    drm_vendors.append(f.read().strip().lower())
+            except Exception:
+                pass
+
+        has_nvidia = any("0x10de" in v for v in drm_vendors)
+        has_discrete = has_nvidia
+        if not has_discrete:
+            try:
+                p = subprocess.run(["lspci", "-nn"], capture_output=True, text=True, timeout=0.15)
+                for line in p.stdout.splitlines():
+                    low = line.lower()
+                    if any(k in low for k in ["vga compatible controller", "3d controller", "display controller"]):
+                        if any(dgpu in low for dgpu in ["nvidia", "geforce", "quadro", "rtx", "arc", "radeon rx", "radeon pro"]):
+                            has_discrete = True
+                            break
+            except Exception:
+                pass
+
+        profile = {
+            "is_low_end": not has_discrete,
+            "has_discrete_gpu": has_discrete,
+            "gpu_acceleration": has_discrete,
+            "profile": "high_performance" if has_discrete else "low_end",
+            "reason": "Dedicated GPU detected" if has_discrete else "Integrated / low-power GPU detected"
+        }
+
+    try:
+        with open(cache_path, "w") as f:
+            json.dump(profile, f)
+    except Exception:
+        pass
+    return profile
+
+def get_cached_tabs(allow_spawn=True):
+    # 1. Real-time shared memory tabs (0ms from browser extension)
+    shm_file = "/dev/shm/browser_tabs.json"
+    if os.path.exists(shm_file):
+        try:
+            with open(shm_file, "r") as f:
+                data = json.load(f)
+                if isinstance(data, list) and len(data) > 0:
+                    return data
+        except Exception:
+            pass
+
+    # 2. Check disk cache (fresh within 5s)
     now = time.time()
     if os.path.exists(CACHE_FILE):
         try:
-            mtime = os.path.getmtime(CACHE_FILE)
-            if now - mtime < 0.8:
+            if now - os.path.getmtime(CACHE_FILE) < 5.0:
                 with open(CACHE_FILE, "r") as f:
                     return json.load(f)
         except Exception:
             pass
-    try:
-        p = subprocess.run(["python3", tabs_script], capture_output=True, text=True, timeout=0.3)
-        tabs = json.loads(p.stdout.trim()) if hasattr(p.stdout, 'trim') else json.loads(p.stdout.strip() or "[]")
-        with open(CACHE_FILE, "w") as f:
-            json.dump(tabs, f)
-        return tabs
-    except Exception:
-        return []
+
+    # 3. If stale and allowed, trigger background refresh without blocking
+    if allow_spawn:
+        try:
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            tabs_script = os.path.join(script_dir, "get_browser_tabs.py")
+            if os.path.exists(tabs_script):
+                subprocess.Popen(["python3", tabs_script], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            pass
+
+    return []
 
 def get_valid_clients():
     clients = query_hypr_socket("j/clients") or []
@@ -95,11 +184,13 @@ def cmd_context():
     win = query_hypr_socket("j/activewindow") or {}
     tabs = get_cached_tabs()
     clients = get_valid_clients()
+    gpu = get_gpu_profile()
     print(json.dumps({
         "cursor": cursor,
         "window": win,
         "tabs": tabs,
-        "clients": clients
+        "clients": clients,
+        "gpu": gpu
     }))
 
 def cmd_clients():
@@ -180,6 +271,8 @@ if __name__ == "__main__":
         cmd_clipboard()
     elif cmd == "audio_sinks":
         cmd_audio_sinks()
+    elif cmd == "gpu":
+        print(json.dumps(get_gpu_profile(), indent=2))
     elif cmd == "paste" and len(sys.argv) >= 3:
         cmd_paste(sys.argv[2])
     elif cmd == "set_sink" and len(sys.argv) >= 3:

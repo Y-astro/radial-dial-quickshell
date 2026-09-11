@@ -758,6 +758,14 @@ Item {
         id: folderBrowser
         anchors.fill: parent
         z: 300
+        colPrimary: root.colPrimary
+        colOnPrimary: root.colOnPrimary
+        colOnSurface: root.colOnSurface
+        colSubtext: root.colSubtext
+        colSurfaceContainer: root.colSurfaceContainer
+        colOutline: root.colOutline
+        colLayer2: (typeof Appearance !== "undefined" && Appearance.colors && Appearance.colors.colLayer2) ? Appearance.colors.colLayer2 : Qt.rgba(0.14, 0.14, 0.18, 0.9)
+        colLayer0: (typeof Appearance !== "undefined" && Appearance.colors && Appearance.colors.colLayer0) ? Appearance.colors.colLayer0 : Qt.rgba(0.06, 0.06, 0.08, 0.5)
         onFolderSelected: (path, name) => {
             root.fileTargetPath = path
             if (root.fileTargetLabel === "" || root.fileTargetLabel === "Folder") {

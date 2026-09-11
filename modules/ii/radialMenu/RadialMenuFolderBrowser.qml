@@ -4,6 +4,9 @@ import QtQuick.Layouts
 import QtQuick.Controls
 import Quickshell
 import Quickshell.Io
+import qs
+import qs.modules.common
+import qs.modules.common.widgets
 
 // ─────────────────────────────────────────────────────────────────────────────
 // RadialMenuFolderBrowser — In-Dial Directory Picker Modal Window
@@ -32,15 +35,17 @@ Item {
         return u.replace(/^file:\/\//, "")
     }
 
-    // Universal theme fallbacks
-    readonly property color colPrimary: (typeof Appearance !== "undefined" && Appearance.colors) ? Appearance.colors.colPrimary : Qt.rgba(0.66, 0.78, 0.98, 1.0)
-    readonly property color colOnPrimary: (typeof Appearance !== "undefined" && Appearance.colors) ? Appearance.colors.colOnPrimary : Qt.rgba(0.02, 0.18, 0.44, 1.0)
-    readonly property color colOnSurface: (typeof Appearance !== "undefined" && Appearance.colors) ? Appearance.colors.colOnSurface : Qt.rgba(0.90, 0.90, 0.93, 1.0)
-    readonly property color colSubtext: (typeof Appearance !== "undefined" && Appearance.colors && Appearance.colors.colSubtext) ? Appearance.colors.colSubtext : Qt.rgba(0.70, 0.70, 0.75, 0.8)
-    readonly property color colSurfaceContainer: (typeof Appearance !== "undefined" && Appearance.colors && Appearance.colors.colSurfaceContainerHigh) ? Appearance.colors.colSurfaceContainerHigh : Qt.rgba(0.09, 0.09, 0.13, 0.96)
-    readonly property color colOutline: (typeof Appearance !== "undefined" && Appearance.colors) ? Appearance.colors.colOutline : Qt.rgba(1.0, 1.0, 1.0, 0.14)
-    readonly property string fontMain: (typeof Appearance !== "undefined" && Appearance.font && Appearance.font.family) ? Appearance.font.family.main : "sans-serif"
-    readonly property string fontIcon: (typeof Appearance !== "undefined" && Appearance.font && Appearance.font.family) ? Appearance.font.family.iconMaterial : "Material Symbols Rounded"
+    // Dynamic Theme colors (syncs with Appearance / wallpaper palette, with universal fallbacks)
+    property color colPrimary: (typeof Appearance !== "undefined" && Appearance.colors && Appearance.colors.colPrimary) ? Appearance.colors.colPrimary : Qt.rgba(0.66, 0.78, 0.98, 1.0)
+    property color colOnPrimary: (typeof Appearance !== "undefined" && Appearance.colors && Appearance.colors.colOnPrimary) ? Appearance.colors.colOnPrimary : Qt.rgba(0.02, 0.18, 0.44, 1.0)
+    property color colOnSurface: (typeof Appearance !== "undefined" && Appearance.colors && Appearance.colors.colOnSurface) ? Appearance.colors.colOnSurface : Qt.rgba(0.90, 0.90, 0.93, 1.0)
+    property color colSubtext: (typeof Appearance !== "undefined" && Appearance.colors && Appearance.colors.colSubtext) ? Appearance.colors.colSubtext : Qt.rgba(0.70, 0.70, 0.75, 0.8)
+    property color colSurfaceContainer: (typeof Appearance !== "undefined" && Appearance.colors && (Appearance.colors.colSurfaceContainerHigh || Appearance.colors.colSurfaceContainer || Appearance.colors.colLayer1)) ? (Appearance.colors.colSurfaceContainerHigh || Appearance.colors.colSurfaceContainer || Appearance.colors.colLayer1) : Qt.rgba(0.09, 0.09, 0.13, 0.98)
+    property color colOutline: (typeof Appearance !== "undefined" && Appearance.colors && (Appearance.colors.colOutlineVariant || Appearance.colors.colOutline)) ? (Appearance.colors.colOutlineVariant || Appearance.colors.colOutline) : Qt.rgba(1.0, 1.0, 1.0, 0.14)
+    property color colLayer2: (typeof Appearance !== "undefined" && Appearance.colors && Appearance.colors.colLayer2) ? Appearance.colors.colLayer2 : Qt.rgba(0.14, 0.14, 0.18, 0.9)
+    property color colLayer0: (typeof Appearance !== "undefined" && Appearance.colors && Appearance.colors.colLayer0) ? Appearance.colors.colLayer0 : Qt.rgba(0.06, 0.06, 0.08, 0.5)
+    property string fontMain: (typeof Appearance !== "undefined" && Appearance.font && Appearance.font.family && Appearance.font.family.main) ? Appearance.font.family.main : "sans-serif"
+    property string fontIcon: (typeof Appearance !== "undefined" && Appearance.font && Appearance.font.family && Appearance.font.family.iconMaterial) ? Appearance.font.family.iconMaterial : "Material Symbols Rounded"
 
     visible: opacity > 0.001
     opacity: active ? 1.0 : 0.0
@@ -136,13 +141,13 @@ Item {
     // Main Modal Card Window
     Rectangle {
         id: card
-        width: Math.min(parent.width - 40, 540)
+        width: Math.min(parent.width - 32, 560)
         height: Math.min(parent.height - 40, 580)
         anchors.centerIn: parent
         radius: 22
-        color: Qt.rgba(0.09, 0.09, 0.13, 0.98)
+        color: root.colSurfaceContainer
         border.color: root.colOutline
-        border.width: 1.2
+        border.width: 1.5
 
         // Prevent click-through
         MouseArea {
@@ -153,7 +158,7 @@ Item {
 
         ColumnLayout {
             anchors.fill: parent
-            anchors.margins: 20
+            anchors.margins: 18
             spacing: 12
 
             // ── 1. Header ────────────────────────────────────────────────────
@@ -166,8 +171,10 @@ Item {
                     width: 36
                     height: 36
                     radius: 18
-                    color: navBackHover.hovered ? Qt.rgba(1.0, 1.0, 1.0, 0.14) : Qt.rgba(1.0, 1.0, 1.0, 0.06)
-                    border.color: Qt.rgba(1.0, 1.0, 1.0, 0.12)
+                    color: navBackHover.hovered
+                        ? Qt.rgba(root.colPrimary.r, root.colPrimary.g, root.colPrimary.b, 0.22)
+                        : Qt.rgba(root.colPrimary.r, root.colPrimary.g, root.colPrimary.b, 0.12)
+                    border.color: Qt.rgba(root.colPrimary.r, root.colPrimary.g, root.colPrimary.b, 0.35)
                     border.width: 1
 
                     MaterialSymbol {
@@ -232,8 +239,8 @@ Item {
                 Layout.fillWidth: true
                 height: 38
                 radius: 10
-                color: Qt.rgba(0.14, 0.14, 0.18, 0.9)
-                border.color: Qt.rgba(1.0, 1.0, 1.0, 0.12)
+                color: root.colLayer2
+                border.color: root.colOutline
                 border.width: 1
 
                 RowLayout {
@@ -247,13 +254,13 @@ Item {
                         width: 26
                         height: 26
                         radius: 6
-                        color: upHover.hovered ? Qt.rgba(1.0, 1.0, 1.0, 0.18) : "transparent"
+                        color: upHover.hovered ? Qt.rgba(root.colPrimary.r, root.colPrimary.g, root.colPrimary.b, 0.20) : "transparent"
 
                         MaterialSymbol {
                             anchors.centerIn: parent
                             text: "arrow_upward"
                             iconSize: 16
-                            color: root.parentPath ? root.colPrimary : Qt.rgba(1.0, 1.0, 1.0, 0.3)
+                            color: root.parentPath ? root.colPrimary : Qt.rgba(root.colOnSurface.r, root.colOnSurface.g, root.colOnSurface.b, 0.3)
                         }
 
                         HoverHandler { id: upHover }
@@ -279,7 +286,7 @@ Item {
                         width: 26
                         height: 26
                         radius: 6
-                        color: refreshHover.hovered ? Qt.rgba(1.0, 1.0, 1.0, 0.18) : "transparent"
+                        color: refreshHover.hovered ? Qt.rgba(root.colPrimary.r, root.colPrimary.g, root.colPrimary.b, 0.20) : "transparent"
 
                         MaterialSymbol {
                             anchors.centerIn: parent
@@ -296,63 +303,118 @@ Item {
                 }
             }
 
-            // ── 3. Places & Drives Quick Navigation ──────────────────────────
-            ScrollView {
+            // ── 3. Places & Drives Quick Navigation (Scrollable ListView) ─────
+            Item {
                 Layout.fillWidth: true
-                height: 36
-                contentHeight: 36
-                ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
-                ScrollBar.vertical.policy: ScrollBar.AlwaysOff
-                clip: true
+                height: 34
 
-                Row {
+                ListView {
+                    id: placesList
+                    anchors.fill: parent
+                    orientation: ListView.Horizontal
                     spacing: 6
+                    clip: true
+                    boundsBehavior: Flickable.StopAtBounds
+                    model: root.places
 
-                    Repeater {
-                        model: root.places
+                    WheelHandler {
+                        target: placesList
+                        orientation: Qt.Vertical
+                        acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+                        onWheel: (event) => {
+                            const delta = event.angleDelta.y !== 0 ? event.angleDelta.y : event.angleDelta.x
+                            placesList.contentX = Math.max(0, Math.min(placesList.contentWidth - placesList.width, placesList.contentX - delta))
+                        }
+                    }
 
-                        delegate: Rectangle {
-                            id: placeChip
-                            required property var modelData
-
-                            height: 32
-                            width: placeRow.implicitWidth + 18
-                            radius: 16
-
-                            readonly property bool isSelected: root.currentPath === placeChip.modelData.path
-
-                            color: isSelected
-                                ? root.colPrimary
-                                : (placeHover.hovered ? Qt.rgba(1.0, 1.0, 1.0, 0.14) : Qt.rgba(1.0, 1.0, 1.0, 0.07))
-                            border.color: isSelected
-                                ? root.colPrimary
-                                : Qt.rgba(1.0, 1.0, 1.0, 0.12)
-                            border.width: 1
-
-                            RowLayout {
-                                id: placeRow
-                                anchors.centerIn: parent
-                                spacing: 5
-
-                                MaterialSymbol {
-                                    text: placeChip.modelData.icon || "folder"
-                                    iconSize: 14
-                                    color: placeChip.isSelected ? root.colOnPrimary : root.colPrimary
+                    Connections {
+                        target: root
+                        function onCurrentPathChanged() {
+                            if (!root.places) return
+                            for (let i = 0; i < root.places.length; i++) {
+                                if (root.places[i].path === root.currentPath) {
+                                    placesList.positionViewAtIndex(i, ListView.Visible)
+                                    break
                                 }
-
-                                StyledText {
-                                    text: placeChip.modelData.name
-                                    font.pixelSize: 11
-                                    font.weight: placeChip.isSelected ? Font.Bold : Font.Normal
-                                    color: placeChip.isSelected ? root.colOnPrimary : root.colOnSurface
-                                }
-                            }
-
-                            HoverHandler { id: placeHover }
-                            TapHandler {
-                                onTapped: root.navigateTo(placeChip.modelData.path)
                             }
                         }
+                    }
+
+                    delegate: Rectangle {
+                        id: placeChip
+                        required property var modelData
+
+                        height: 30
+                        width: placeRow.implicitWidth + 18
+                        radius: 15
+
+                        readonly property bool isSelected: root.currentPath === placeChip.modelData.path
+
+                        color: isSelected
+                            ? root.colPrimary
+                            : (placeHover.hovered
+                                ? Qt.rgba(root.colPrimary.r, root.colPrimary.g, root.colPrimary.b, 0.18)
+                                : root.colLayer2)
+                        border.color: isSelected
+                            ? root.colPrimary
+                            : (placeHover.hovered
+                                ? Qt.rgba(root.colPrimary.r, root.colPrimary.g, root.colPrimary.b, 0.40)
+                                : root.colOutline)
+                        border.width: 1
+
+                        RowLayout {
+                            id: placeRow
+                            anchors.centerIn: parent
+                            spacing: 5
+
+                            MaterialSymbol {
+                                text: placeChip.modelData.icon || "folder"
+                                iconSize: 14
+                                color: placeChip.isSelected ? root.colOnPrimary : root.colPrimary
+                            }
+
+                            StyledText {
+                                text: placeChip.modelData.name
+                                font.pixelSize: 11
+                                font.weight: placeChip.isSelected ? Font.Bold : Font.Normal
+                                color: placeChip.isSelected ? root.colOnPrimary : root.colOnSurface
+                            }
+                        }
+
+                        HoverHandler { id: placeHover }
+                        TapHandler {
+                            onTapped: root.navigateTo(placeChip.modelData.path)
+                        }
+                    }
+                }
+
+                // Left scroll fade gradient
+                Rectangle {
+                    anchors.left: parent.left
+                    anchors.top: parent.top
+                    anchors.bottom: parent.bottom
+                    width: 16
+                    visible: placesList.contentX > 4
+                    z: 5
+                    gradient: Gradient {
+                        orientation: Gradient.Horizontal
+                        GradientStop { position: 0.0; color: root.colSurfaceContainer }
+                        GradientStop { position: 1.0; color: "transparent" }
+                    }
+                }
+
+                // Right scroll fade gradient
+                Rectangle {
+                    anchors.right: parent.right
+                    anchors.top: parent.top
+                    anchors.bottom: parent.bottom
+                    width: 16
+                    visible: (placesList.contentWidth - placesList.width - placesList.contentX) > 4
+                    z: 5
+                    gradient: Gradient {
+                        orientation: Gradient.Horizontal
+                        GradientStop { position: 0.0; color: "transparent" }
+                        GradientStop { position: 1.0; color: root.colSurfaceContainer }
                     }
                 }
             }
@@ -362,8 +424,8 @@ Item {
                 Layout.fillWidth: true
                 height: 34
                 radius: 10
-                color: Qt.rgba(0.12, 0.12, 0.16, 0.7)
-                border.color: Qt.rgba(1.0, 1.0, 1.0, 0.10)
+                color: root.colLayer2
+                border.color: filterBox.activeFocus ? root.colPrimary : root.colOutline
                 border.width: 1
 
                 RowLayout {
@@ -375,7 +437,7 @@ Item {
                     MaterialSymbol {
                         text: "search"
                         iconSize: 15
-                        color: Qt.rgba(1.0, 1.0, 1.0, 0.4)
+                        color: filterBox.activeFocus ? root.colPrimary : Qt.rgba(root.colOnSurface.r, root.colOnSurface.g, root.colOnSurface.b, 0.4)
                     }
 
                     TextInput {
@@ -390,7 +452,7 @@ Item {
                             text: "Filter subfolders..."
                             visible: !filterBox.text && !filterBox.activeFocus
                             font.pixelSize: 12
-                            color: Qt.rgba(1.0, 1.0, 1.0, 0.3)
+                            color: Qt.rgba(root.colOnSurface.r, root.colOnSurface.g, root.colOnSurface.b, 0.35)
                             anchors.left: parent.left
                             anchors.verticalCenter: parent.verticalCenter
                         }
@@ -420,8 +482,8 @@ Item {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 radius: 12
-                color: Qt.rgba(0.06, 0.06, 0.08, 0.5)
-                border.color: Qt.rgba(1.0, 1.0, 1.0, 0.08)
+                color: root.colLayer0
+                border.color: root.colOutline
                 border.width: 1
                 clip: true
 
@@ -440,7 +502,7 @@ Item {
                         width: folderListView.width - 8
                         height: 38
                         radius: 8
-                        color: itemHover.hovered ? Qt.rgba(1.0, 1.0, 1.0, 0.12) : "transparent"
+                        color: itemHover.hovered ? Qt.rgba(root.colPrimary.r, root.colPrimary.g, root.colPrimary.b, 0.15) : "transparent"
 
                         RowLayout {
                             anchors.fill: parent
@@ -465,7 +527,7 @@ Item {
                             MaterialSymbol {
                                 text: "chevron_right"
                                 iconSize: 16
-                                color: Qt.rgba(1.0, 1.0, 1.0, 0.25)
+                                color: itemHover.hovered ? root.colPrimary : Qt.rgba(root.colOnSurface.r, root.colOnSurface.g, root.colOnSurface.b, 0.25)
                             }
                         }
 
@@ -488,14 +550,14 @@ Item {
                                 Layout.alignment: Qt.AlignHCenter
                                 text: root.loading ? "progress_activity" : "folder_off"
                                 iconSize: 32
-                                color: Qt.rgba(1.0, 1.0, 1.0, 0.3)
+                                color: root.loading ? root.colPrimary : Qt.rgba(root.colOnSurface.r, root.colOnSurface.g, root.colOnSurface.b, 0.3)
                             }
 
                             StyledText {
                                 Layout.alignment: Qt.AlignHCenter
                                 text: root.loading ? "Scanning directory..." : (root.filterQuery ? "No matching folders" : "No subfolders in this directory")
                                 font.pixelSize: 12
-                                color: Qt.rgba(1.0, 1.0, 1.0, 0.4)
+                                color: root.colSubtext
                             }
                         }
                     }
@@ -513,7 +575,7 @@ Item {
                     height: 40
                     radius: 10
                     color: cancelHover.hovered ? Qt.rgba(1.0, 1.0, 1.0, 0.14) : Qt.rgba(1.0, 1.0, 1.0, 0.08)
-                    border.color: Qt.rgba(1.0, 1.0, 1.0, 0.16)
+                    border.color: root.colOutline
                     border.width: 1
 
                     StyledText {

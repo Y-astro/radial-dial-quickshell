@@ -197,9 +197,11 @@ pub fn render_folder_browser(
     pixmap: &mut tiny_skia::Pixmap,
     screen_w: f32,
     screen_h: f32,
+    anchor_x: f32,
+    anchor_y: f32,
 ) {
     let mut font_renderer = FontRenderer::new();
-    render_folder_browser_with_font(state, pixmap, screen_w, screen_h, &mut font_renderer);
+    render_folder_browser_with_font(state, pixmap, screen_w, screen_h, anchor_x, anchor_y, &mut font_renderer);
 }
 
 /// Render the folder browser modal dialog reusing an existing `FontRenderer`.
@@ -208,6 +210,8 @@ pub fn render_folder_browser_with_font(
     pixmap: &mut tiny_skia::Pixmap,
     screen_w: f32,
     screen_h: f32,
+    anchor_x: f32,
+    anchor_y: f32,
     font_renderer: &mut FontRenderer,
 ) {
     if !state.is_open {
@@ -220,19 +224,20 @@ pub fn render_folder_browser_with_font(
     let col_on_surface = Color::from_rgba8(205, 214, 244, 255); // Catppuccin Text
     let col_subtext = Color::from_rgba8(166, 173, 200, 200);   // Catppuccin Subtext
 
-    // 1. Fullscreen dark backdrop scrim
-    let scrim_col = Color::from_rgba(0.04, 0.04, 0.06, 0.65).unwrap_or(Color::BLACK);
+    // 1. Frosted glass backdrop
     let mut scrim_paint = Paint::default();
-    scrim_paint.set_color(scrim_col);
+    scrim_paint.set_color(Color::from_rgba8(0, 0, 6, 128));
     if let Some(scrim_rect) = tiny_skia::Rect::from_xywh(0.0, 0.0, screen_w, screen_h) {
         pixmap.fill_rect(scrim_rect, &scrim_paint, Transform::identity(), None);
     }
 
-    // 2. Main Modal Card
-    let card_w = 480.0_f32.min(screen_w - 32.0);
-    let card_h = 540.0_f32.min(screen_h - 32.0);
-    let card_x = (screen_w - card_w) / 2.0;
-    let card_y = (screen_h - card_h) / 2.0;
+    // 2. Main Modal Card (anchor-relative positioning)
+    let card_w = 480.0_f32.min(screen_w - 20.0);
+    let card_h = 540.0_f32.min(screen_h - 20.0);
+    let preferred_x = anchor_x - card_w / 2.0 + (screen_w / 2.0 - anchor_x).signum() * 60.0;
+    let preferred_y = anchor_y - card_h / 2.0 + (screen_h / 2.0 - anchor_y).signum() * 60.0;
+    let card_x = preferred_x.clamp(10.0, screen_w - card_w - 10.0);
+    let card_y = preferred_y.clamp(10.0, screen_h - card_h - 10.0);
     let card_radius = 22.0;
 
     // Card background fill & border
@@ -778,7 +783,7 @@ mod tests {
         let mut pixmap = Pixmap::new(800, 600).unwrap();
         pixmap.fill(Color::TRANSPARENT);
 
-        render_folder_browser(&state, &mut pixmap, 800.0, 600.0);
+        render_folder_browser(&state, &mut pixmap, 800.0, 600.0, 400.0, 300.0);
 
         let non_zero = pixmap.pixels().iter().filter(|p| p.alpha() > 0).count();
         assert_eq!(non_zero, 0, "Closed folder browser should render nothing");
@@ -823,7 +828,7 @@ mod tests {
         let mut pixmap = Pixmap::new(800, 600).unwrap();
         pixmap.fill(Color::TRANSPARENT);
 
-        render_folder_browser(&state, &mut pixmap, 800.0, 600.0);
+        render_folder_browser(&state, &mut pixmap, 800.0, 600.0, 400.0, 300.0);
 
         let non_zero = pixmap.pixels().iter().filter(|p| p.alpha() > 0).count();
         assert!(non_zero > 1000, "Open folder browser modal must render visible pixels onto pixmap");

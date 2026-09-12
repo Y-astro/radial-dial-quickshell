@@ -282,13 +282,16 @@ thread_local! {
     static CUSTOMIZER_FONT_RENDERER: std::cell::RefCell<FontRenderer> = std::cell::RefCell::new(FontRenderer::new());
 }
 
-/// Render the customizer modal: 480x560 px rounded card centered on screen.
+/// Render the customizer modal: 480x560 px rounded card positioned near anchor.
 pub fn render_customizer(
     state: &CustomizerState,
     catalogue: &[ActionDef],
+    active_slice_ids: &[String],
     pixmap: &mut Pixmap,
     screen_w: f32,
     screen_h: f32,
+    anchor_x: f32,
+    anchor_y: f32,
 ) {
     if !state.is_open || screen_w <= 0.0 || screen_h <= 0.0 {
         return;
@@ -297,9 +300,12 @@ pub fn render_customizer(
         render_customizer_with_font(
             state,
             catalogue,
+            active_slice_ids,
             pixmap,
             screen_w,
             screen_h,
+            anchor_x,
+            anchor_y,
             &mut fr.borrow_mut(),
             CustomizerColors::default(),
         );
@@ -310,9 +316,12 @@ pub fn render_customizer(
 pub fn render_customizer_with_font(
     state: &CustomizerState,
     catalogue: &[ActionDef],
+    active_slice_ids: &[String],
     pixmap: &mut Pixmap,
     screen_w: f32,
     screen_h: f32,
+    anchor_x: f32,
+    anchor_y: f32,
     font_renderer: &mut FontRenderer,
     colors: CustomizerColors,
 ) {
@@ -320,18 +329,38 @@ pub fn render_customizer_with_font(
         return;
     }
 
-    // 1. Dim Backdrop
+    // 1. Frosted glass backdrop: 3 layers for depth
+    // Layer 1: Deep dark scrim
     let mut backdrop_paint = Paint::default();
-    backdrop_paint.set_color(Color::from_rgba8(0, 0, 0, 115)); // ~45% dim
+    backdrop_paint.set_color(Color::from_rgba8(0, 0, 6, 128)); // ~50% dark
     if let Some(rect) = tiny_skia::Rect::from_xywh(0.0, 0.0, screen_w, screen_h) {
         pixmap.fill_rect(rect, &backdrop_paint, Transform::identity(), None);
     }
 
-    // 2. Card Dimensions & Placement (480x560 px centered)
-    let card_w = CARD_W.min(screen_w);
-    let card_h = CARD_H.min(screen_h);
-    let card_x = ((screen_w - card_w) / 2.0).max(0.0);
-    let card_y = ((screen_h - card_h) / 2.0).max(0.0);
+    // 2. Card Dimensions & Placement (480x560 px, anchor-relative)
+    // Position card near anchor (dial center), offset toward screen center, clamped to screen
+    let card_w = CARD_W.min(screen_w - 20.0);
+    let card_h = CARD_H.min(screen_h - 20.0);
+    // Prefer positioning card offset from anchor toward screen center
+    let _margin_x = card_w / 2.0 + 20.0;
+    let _margin_y = card_h / 2.0 + 20.0;
+    // Start from anchor, shift toward center slightly
+    let preferred_x = anchor_x - card_w / 2.0 + (screen_w / 2.0 - anchor_x).signum() * 60.0;
+    let preferred_y = anchor_y - card_h / 2.0 + (screen_h / 2.0 - anchor_y).signum() * 60.0;
+    let card_x = preferred_x.clamp(10.0, screen_w - card_w - 10.0);
+    let card_y = preferred_y.clamp(10.0, screen_h - card_h - 10.0);
+
+    // Layer 2: Blue-tinted frosted overlay around card area
+    let frost_x = (card_x - 40.0).max(0.0);
+    let frost_y = (card_y - 40.0).max(0.0);
+    let frost_w = (card_w + 80.0).min(screen_w - frost_x);
+    let frost_h = (card_h + 80.0).min(screen_h - frost_y);
+    if let Some(frost_path) = rounded_rect_path(frost_x, frost_y, frost_w, frost_h, CARD_RADIUS + 20.0) {
+        let mut frost_paint = Paint::default();
+        frost_paint.set_color(Color::from_rgba8(10, 10, 20, 40));
+        frost_paint.anti_alias = true;
+        pixmap.fill_path(&frost_path, &frost_paint, FillRule::Winding, Transform::identity(), None);
+    }
 
     // Subtle drop shadow outline
     stroke_rounded_rect(
@@ -348,7 +377,7 @@ pub fn render_customizer_with_font(
     // Card background fill
     fill_rounded_rect(pixmap, card_x, card_y, card_w, card_h, CARD_RADIUS, colors.card_bg);
 
-    // Card border
+    // Card border - brighter for frosted glass effect
     stroke_rounded_rect(
         pixmap,
         card_x,
@@ -356,7 +385,7 @@ pub fn render_customizer_with_font(
         card_w,
         card_h,
         CARD_RADIUS,
-        col_card_border(),
+        Color::from_rgba8(255, 255, 255, 60), // brighter than before
         1.5,
     );
 
@@ -366,12 +395,22 @@ pub fn render_customizer_with_font(
     highlight_pb.line_to(card_x + card_w - CARD_RADIUS, card_y + 1.5);
     if let Some(p) = highlight_pb.finish() {
         let mut paint = Paint::default();
-        paint.set_color(Color::from_rgba8(255, 255, 255, 46));
+        paint.set_color(Color::from_rgba8(255, 255, 255, 80)); // brighter
         let stroke = Stroke {
-            width: 1.0,
+            width: 1.5,
             ..Default::default()
         };
         pixmap.stroke_path(&p, &paint, &stroke, Transform::identity(), None);
+    }
+    // Second subtle glow below first line
+    let mut glow_pb = PathBuilder::new();
+    glow_pb.move_to(card_x + CARD_RADIUS, card_y + 3.0);
+    glow_pb.line_to(card_x + card_w - CARD_RADIUS, card_y + 3.0);
+    if let Some(p2) = glow_pb.finish() {
+        let mut paint2 = Paint::default();
+        paint2.set_color(Color::from_rgba8(255, 255, 255, 30));
+        let stroke2 = Stroke { width: 1.0, ..Default::default() };
+        pixmap.stroke_path(&p2, &paint2, &stroke2, Transform::identity(), None);
     }
 
     // 3. Title Bar / Header (mode description & close button)
@@ -496,6 +535,7 @@ pub fn render_customizer_with_font(
             render_slice_swap_body(
                 state,
                 catalogue,
+                active_slice_ids,
                 content_x,
                 card_y,
                 content_w,
@@ -539,6 +579,7 @@ pub fn render_customizer_with_font(
 fn render_slice_swap_body(
     state: &CustomizerState,
     catalogue: &[ActionDef],
+    active_slice_ids: &[String],
     content_x: f32,
     card_y: f32,
     content_w: f32,
@@ -670,11 +711,34 @@ fn render_slice_swap_body(
     }
 
     // 3. Scrollable Catalogue Action List
+    // Build ordered list: active items first, then filtered catalogue (excluding already-active unless in filtered view)
     let list_y = card_y + 142.0;
     let list_h = 368.0;
-    let items = state.filtered_catalogue(catalogue);
+    let filtered = state.filtered_catalogue(catalogue);
 
-    if items.is_empty() {
+    // Build item list: each entry is (action_def, is_active)
+    let mut ordered_items: Vec<(&ActionDef, bool)> = Vec::new();
+
+    // Active items first (in order they appear in active_slice_ids)
+    for active_id in active_slice_ids {
+        if let Some(def) = catalogue.iter().find(|d| d.id == active_id.as_str()) {
+            // Only show if it passes current filter
+            let passes_filter = filtered.iter().any(|f| f.id == def.id);
+            if passes_filter {
+                ordered_items.push((def, true));
+            }
+        }
+    }
+
+    // Then filtered items that are NOT already active
+    for def in &filtered {
+        let is_active = active_slice_ids.iter().any(|id| id.as_str() == def.id);
+        if !is_active {
+            ordered_items.push((def, false));
+        }
+    }
+
+    if ordered_items.is_empty() {
         draw_text(
             font_renderer,
             pixmap,
@@ -690,18 +754,16 @@ fn render_slice_swap_body(
         let step = item_h + item_gap;
         let start_y = list_y - state.scroll_offset;
 
-        for (idx, item) in items.iter().enumerate() {
+        for (idx, (item, is_active)) in ordered_items.iter().enumerate() {
             let cur_y = start_y + idx as f32 * step;
 
-            // Viewport bounds check: skip items completely outside list bounds
+            // Viewport bounds check
             if cur_y + item_h < list_y || cur_y > list_y + list_h {
                 continue;
             }
 
-            let is_selected = state.selected_item.as_deref() == Some(item.id);
-
-            // Item card background & border
-            if is_selected {
+            // Item card background - active items have subtle primary tint
+            if *is_active {
                 fill_rounded_rect(
                     pixmap,
                     content_x,
@@ -709,7 +771,7 @@ fn render_slice_swap_body(
                     content_w,
                     item_h,
                     12.0,
-                    Color::from_rgba(colors.primary.red(), colors.primary.green(), colors.primary.blue(), 0.20)
+                    Color::from_rgba(colors.primary.red(), colors.primary.green(), colors.primary.blue(), 0.12)
                         .unwrap_or(colors.primary),
                 );
                 stroke_rounded_rect(
@@ -719,8 +781,9 @@ fn render_slice_swap_body(
                     content_w,
                     item_h,
                     12.0,
-                    colors.primary,
-                    1.5,
+                    Color::from_rgba(colors.primary.red(), colors.primary.green(), colors.primary.blue(), 0.35)
+                        .unwrap_or(colors.primary),
+                    1.0,
                 );
             } else {
                 fill_rounded_rect(
@@ -748,19 +811,15 @@ fn render_slice_swap_body(
             let ib_x = content_x + 8.0;
             let ib_y = cur_y + 8.0;
             let ib_size = 34.0;
-            let ib_bg = if is_selected {
-                Color::from_rgba(colors.primary.red(), colors.primary.green(), colors.primary.blue(), 0.18)
+            let ib_bg = if *is_active {
+                Color::from_rgba(colors.primary.red(), colors.primary.green(), colors.primary.blue(), 0.20)
                     .unwrap_or(colors.primary)
             } else {
                 Color::from_rgba8(255, 255, 255, 15)
             };
             fill_rounded_rect(pixmap, ib_x, ib_y, ib_size, ib_size, 10.0, ib_bg);
 
-            let icon_col = if is_selected {
-                colors.primary
-            } else {
-                colors.on_surface
-            };
+            let icon_col = if *is_active { colors.primary } else { colors.on_surface };
             draw_icon(
                 font_renderer,
                 pixmap,
@@ -783,11 +842,7 @@ fn render_slice_swap_body(
                 colors.on_surface,
             );
 
-            let desc = if item.desc.is_empty() {
-                item.category
-            } else {
-                item.desc
-            };
+            let desc = if item.desc.is_empty() { item.category } else { item.desc };
             draw_text_left(
                 font_renderer,
                 pixmap,
@@ -798,42 +853,81 @@ fn render_slice_swap_body(
                 colors.subtext,
             );
 
-            // Right action button (+ Add or - Remove)
-            let btn_w = 64.0;
-            let btn_h = 26.0;
-            let btn_x = content_x + content_w - btn_w - 10.0;
-            let btn_y = cur_y + 12.0;
-
-            if is_selected {
+            // Right action button
+            if *is_active {
+                // "Active" badge + red remove circle button
+                let badge_w = 64.0;
+                let badge_h = 22.0;
+                let badge_x = content_x + content_w - 46.0 - badge_w - 8.0;
+                let badge_y = cur_y + (item_h - badge_h) / 2.0;
                 fill_rounded_rect(
                     pixmap,
-                    btn_x,
-                    btn_y,
-                    btn_w,
-                    btn_h,
-                    13.0,
-                    Color::from_rgba8(255, 107, 107, 51),
+                    badge_x,
+                    badge_y,
+                    badge_w,
+                    badge_h,
+                    11.0,
+                    Color::from_rgba(colors.primary.red(), colors.primary.green(), colors.primary.blue(), 0.18)
+                        .unwrap_or(colors.primary),
                 );
                 stroke_rounded_rect(
                     pixmap,
-                    btn_x,
-                    btn_y,
-                    btn_w,
-                    btn_h,
-                    13.0,
-                    col_danger(),
+                    badge_x,
+                    badge_y,
+                    badge_w,
+                    badge_h,
+                    11.0,
+                    Color::from_rgba(colors.primary.red(), colors.primary.green(), colors.primary.blue(), 0.5)
+                        .unwrap_or(colors.primary),
                     1.0,
                 );
-                draw_text(
+                draw_icon(
                     font_renderer,
                     pixmap,
-                    "Remove",
-                    btn_x + btn_w / 2.0,
-                    btn_y + btn_h / 2.0,
+                    "check_circle",
+                    badge_x + 14.0,
+                    badge_y + badge_h / 2.0,
+                    13.0,
+                    colors.primary,
+                );
+                draw_text_left(
+                    font_renderer,
+                    pixmap,
+                    "Active",
+                    badge_x + 24.0,
+                    badge_y + badge_h / 2.0,
                     10.0,
-                    col_danger(),
+                    colors.primary,
+                );
+
+                // Red remove circle
+                let rm_r = 14.0;
+                let rm_cx = content_x + content_w - 10.0 - rm_r;
+                let rm_cy = cur_y + item_h / 2.0;
+                fill_rounded_rect(
+                    pixmap,
+                    rm_cx - rm_r,
+                    rm_cy - rm_r,
+                    rm_r * 2.0,
+                    rm_r * 2.0,
+                    rm_r,
+                    Color::from_rgba8(255, 80, 80, 200),
+                );
+                draw_icon(
+                    font_renderer,
+                    pixmap,
+                    "remove",
+                    rm_cx,
+                    rm_cy,
+                    14.0,
+                    Color::from_rgba8(255, 255, 255, 230),
                 );
             } else {
+                // "+ Add" button
+                let btn_w = 64.0;
+                let btn_h = 26.0;
+                let btn_x = content_x + content_w - btn_w - 10.0;
+                let btn_y = cur_y + 12.0;
                 fill_rounded_rect(pixmap, btn_x, btn_y, btn_w, btn_h, 13.0, colors.primary);
                 draw_text(
                     font_renderer,
@@ -907,7 +1001,7 @@ fn render_slice_swap_body(
     );
 
     // Right side count indicator
-    let count_str = format!("{} functions", items.len());
+    let count_str = format!("{} functions", ordered_items.len());
     draw_text_left(
         font_renderer,
         pixmap,
@@ -1394,10 +1488,11 @@ mod tests {
     fn test_render_customizer_to_pixmap() {
         let catalogue = function_catalogue();
         let mut state = CustomizerState::default();
+        let active_ids: Vec<String> = Vec::new();
 
         // 1. When is_open is false, pixmap remains blank (0 non-zero pixels)
         let mut pixmap = Pixmap::new(800, 600).unwrap();
-        render_customizer(&state, &catalogue, &mut pixmap, 800.0, 600.0);
+        render_customizer(&state, &catalogue, &active_ids, &mut pixmap, 800.0, 600.0, 400.0, 300.0);
         let non_zero_closed = pixmap.pixels().iter().filter(|p| p.alpha() > 0).count();
         assert_eq!(
             non_zero_closed, 0,
@@ -1406,7 +1501,7 @@ mod tests {
 
         // 2. When is_open is true (SliceSwap mode), pixmap has pixels rendered
         state.is_open = true;
-        render_customizer(&state, &catalogue, &mut pixmap, 800.0, 600.0);
+        render_customizer(&state, &catalogue, &active_ids, &mut pixmap, 800.0, 600.0, 400.0, 300.0);
         let non_zero_open = pixmap.pixels().iter().filter(|p| p.alpha() > 0).count();
         assert!(
             non_zero_open > 1000,
@@ -1420,7 +1515,7 @@ mod tests {
         state.input_label = "Downloads".to_string();
         state.input_path = "~/Downloads".to_string();
         state.input_icon = "download".to_string();
-        render_customizer(&state, &catalogue, &mut pixmap_edit, 800.0, 600.0);
+        render_customizer(&state, &catalogue, &active_ids, &mut pixmap_edit, 800.0, 600.0, 400.0, 300.0);
         let non_zero_edit = pixmap_edit.pixels().iter().filter(|p| p.alpha() > 0).count();
         assert!(
             non_zero_edit > 1000,
@@ -1434,7 +1529,7 @@ mod tests {
         state.input_label = "New Folder".to_string();
         state.input_path = "~/NewFolder".to_string();
         state.input_icon = "folder".to_string();
-        render_customizer(&state, &catalogue, &mut pixmap_add, 800.0, 600.0);
+        render_customizer(&state, &catalogue, &active_ids, &mut pixmap_add, 800.0, 600.0, 400.0, 300.0);
         let non_zero_add = pixmap_add.pixels().iter().filter(|p| p.alpha() > 0).count();
         assert!(
             non_zero_add > 1000,

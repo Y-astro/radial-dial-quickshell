@@ -532,10 +532,14 @@ impl App {
             (1920.0, 1080.0)
         };
 
-        let card_w = renderer::customizer::CARD_W.min(w);
-        let card_h = renderer::customizer::CARD_H.min(h);
-        let card_x = ((w - card_w) / 2.0).max(0.0);
-        let card_y = ((h - card_h) / 2.0).max(0.0);
+        let card_w = renderer::customizer::CARD_W.min(w - 20.0);
+        let card_h = renderer::customizer::CARD_H.min(h - 20.0);
+        let anchor_x = self.menu.center_x;
+        let anchor_y = self.menu.center_y;
+        let preferred_x = anchor_x - card_w / 2.0 + (w / 2.0 - anchor_x).signum() * 60.0;
+        let preferred_y = anchor_y - card_h / 2.0 + (h / 2.0 - anchor_y).signum() * 60.0;
+        let card_x = preferred_x.clamp(10.0, w - card_w - 10.0);
+        let card_y = preferred_y.clamp(10.0, h - card_h - 10.0);
 
         // 1. Outside card -> close customizer
         if x < card_x || x > card_x + card_w || y < card_y || y > card_y + card_h {
@@ -615,30 +619,56 @@ impl App {
                         let offset_in_item = rel_y % step;
                         if offset_in_item <= item_h {
                             let catalogue = state::actions::function_catalogue();
-                            let items = if let Some(c) = &self.customizer {
+                            // Build same ordered list as render: active first, then filtered inactive
+                            let active_ids: Vec<String> = self.menu.current_slices.iter().map(|s| s.id.clone()).collect();
+                            let filtered = if let Some(c) = &self.customizer {
                                 c.filtered_catalogue(&catalogue)
                             } else {
                                 Vec::new()
                             };
-                            if idx < items.len() {
-                                let item = items[idx];
-                                let is_selected = self.customizer.as_ref()
-                                    .and_then(|c| c.selected_item.as_deref()) == Some(item.id);
-                                let btn_w = 64.0;
-                                let btn_x = content_x + content_w - btn_w - 10.0;
-                                let clicked_btn = x >= btn_x && x <= btn_x + btn_w;
-
-                                if is_selected && clicked_btn {
-                                    self.menu.config.remove_slice(&self.menu.context.to_string(), item.id);
-                                } else {
-                                    self.menu.config.swap_slice(&self.menu.context.to_string(), slot_index, item.id);
+                            // ordered: (action_id: &str, is_active: bool)
+                            let mut ordered: Vec<(&str, bool)> = Vec::new();
+                            for active_id in &active_ids {
+                                if let Some(def) = catalogue.iter().find(|d| d.id == active_id.as_str()) {
+                                    let passes = filtered.iter().any(|f| f.id == def.id);
+                                    if passes {
+                                        ordered.push((def.id, true));
+                                    }
                                 }
-                                let _ = self.menu.config.save();
-                                self.menu.refresh_current_slices();
-                                self.customizer = None;
-                                self.seat_handler.customizer_open = false;
-                                self.dirty = true;
-                                return;
+                            }
+                            for def in &filtered {
+                                let is_act = active_ids.iter().any(|id| id.as_str() == def.id);
+                                if !is_act {
+                                    ordered.push((def.id, false));
+                                }
+                            }
+
+                            if idx < ordered.len() {
+                                let (item_id, is_active) = ordered[idx];
+                                if is_active {
+                                    // Clicked on active item: check if remove button was clicked
+                                    let rm_r = 14.0;
+                                    let rm_btn_x = content_x + content_w - 10.0 - rm_r * 2.0;
+                                    if x >= rm_btn_x {
+                                        // Remove this slice
+                                        self.menu.config.remove_slice(&self.menu.context.to_string(), item_id);
+                                        let _ = self.menu.config.save();
+                                        self.menu.refresh_current_slices();
+                                        self.customizer = None;
+                                        self.seat_handler.customizer_open = false;
+                                        self.dirty = true;
+                                        return;
+                                    }
+                                } else {
+                                    // Inactive: swap into the target slot
+                                    self.menu.config.swap_slice(&self.menu.context.to_string(), slot_index, item_id);
+                                    let _ = self.menu.config.save();
+                                    self.menu.refresh_current_slices();
+                                    self.customizer = None;
+                                    self.seat_handler.customizer_open = false;
+                                    self.dirty = true;
+                                    return;
+                                }
                             }
                         }
                     }
@@ -800,10 +830,14 @@ impl App {
             (1920.0, 1080.0)
         };
 
-        let card_w = 480.0_f32.min(w - 32.0);
-        let card_h = 540.0_f32.min(h - 32.0);
-        let card_x = (w - card_w) / 2.0;
-        let card_y = (h - card_h) / 2.0;
+        let card_w = 480.0_f32.min(w - 20.0);
+        let card_h = 540.0_f32.min(h - 20.0);
+        let anchor_x = self.menu.center_x;
+        let anchor_y = self.menu.center_y;
+        let preferred_x = anchor_x - card_w / 2.0 + (w / 2.0 - anchor_x).signum() * 60.0;
+        let preferred_y = anchor_y - card_h / 2.0 + (h / 2.0 - anchor_y).signum() * 60.0;
+        let card_x = preferred_x.clamp(10.0, w - card_w - 10.0);
+        let card_y = preferred_y.clamp(10.0, h - card_h - 10.0);
         let margin = 18.0;
 
         // Outside card -> close
@@ -1259,12 +1293,16 @@ impl App {
                 subtext: parse_hex_color(subtext_hex),
                 card_bg: parse_hex_color(surface_hex),
             };
+            let active_ids: Vec<String> = self.menu.current_slices.iter().map(|s| s.id.clone()).collect();
             renderer::customizer::render_customizer_with_font(
                 customizer_state,
                 &cat,
+                &active_ids,
                 pixmap,
                 w as f32,
                 h as f32,
+                self.menu.center_x,
+                self.menu.center_y,
                 &mut self.font_renderer,
                 customizer_colors,
             );
@@ -1277,6 +1315,8 @@ impl App {
                 pixmap,
                 w as f32,
                 h as f32,
+                self.menu.center_x,
+                self.menu.center_y,
                 &mut self.font_renderer,
             );
         }

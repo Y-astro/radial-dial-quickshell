@@ -772,24 +772,29 @@ impl App {
                     }
                 }
 
-                // Icon picker grid (y: card_y + 226.0 .. card_y + 302.0, 2 rows of 8 icons)
+                // Icon picker grid (Flow layout: 10 columns matching shell reference)
                 let grid_y = card_y + 226.0;
-                let cols = 8;
-                let gap_x = 8.0;
-                let gap_y = 8.0;
-                let icon_w = (content_w - (cols as f32 - 1.0) * gap_x) / cols as f32;
-                let icon_h = 38.0;
+                let cols = 10;
+                let chip_w = 36.0;
+                let chip_h = 36.0;
+                let gap = 8.0;
 
-                if y >= grid_y && y <= grid_y + 2.0 * (icon_h + gap_y) && x >= content_x && x <= content_x + content_w {
-                    let col = ((x - content_x) / (icon_w + gap_x)).floor() as usize;
-                    let row = ((y - grid_y) / (icon_h + gap_y)).floor() as usize;
-                    let idx = row * cols + col;
-                    if idx < renderer::customizer::AVAILABLE_ICONS.len() {
-                        if let Some(c) = &mut self.customizer {
-                            c.input_icon = renderer::customizer::AVAILABLE_ICONS[idx].to_string();
+                if y >= grid_y && y <= grid_y + 2.0 * (chip_h + gap) && x >= content_x && x <= content_x + content_w {
+                    let col = ((x - content_x) / (chip_w + gap)).floor() as usize;
+                    let row = ((y - grid_y) / (chip_h + gap)).floor() as usize;
+                    if col < cols {
+                        let offset_x = (x - content_x) % (chip_w + gap);
+                        let offset_y = (y - grid_y) % (chip_h + gap);
+                        if offset_x <= chip_w && offset_y <= chip_h {
+                            let idx = row * cols + col;
+                            if idx < renderer::customizer::AVAILABLE_ICONS.len() {
+                                if let Some(c) = &mut self.customizer {
+                                    c.input_icon = renderer::customizer::AVAILABLE_ICONS[idx].to_string();
+                                }
+                                self.dirty = true;
+                                return;
+                            }
                         }
-                        self.dirty = true;
-                        return;
                     }
                 }
 
@@ -815,7 +820,7 @@ impl App {
 
                     // Save and Cancel buttons on the right
                     let cancel_w = 80.0;
-                    let save_w = 110.0;
+                    let save_w = 106.0;
                     let save_x = content_x + content_w - save_w;
                     let cancel_x = save_x - cancel_w - 8.0;
 
@@ -931,7 +936,7 @@ impl App {
                 let mut chip_x = card_x + margin;
                 let places_clone = fb.places.clone();
                 for place in &places_clone {
-                    let chip_w = (place.name.len() as f32 * 7.5 + 32.0).clamp(65.0, 120.0);
+                    let chip_w = (place.name.len() as f32 * 6.5 + 28.0).clamp(58.0, 92.0);
                     if chip_x + chip_w > card_x + card_w - margin {
                         break;
                     }
@@ -967,7 +972,7 @@ impl App {
         let bottom_bar_h = 54.0;
         let list_h = card_h - (list_y - card_y) - bottom_bar_h;
         if y >= list_y && y <= list_y + list_h && x >= card_x + margin && x <= card_x + card_w - margin {
-            let item_step = 48.0;
+            let item_step = 38.0;
             let scroll_offset = self.folder_browser.as_ref().map(|fb| fb.scroll_offset).unwrap_or(0.0);
             let rel_y = y - (list_y - scroll_offset);
             if rel_y >= 0.0 {
@@ -1244,176 +1249,191 @@ impl App {
         let hovered = self.menu.hovered_index;
         let hover_factor = self.menu.anim.hover_factor;
 
-        // 1. Draw Main Ring Wedges (with blossom animation & frosted glass styling)
-        let animated_wedges = build_main_ring_paths_animated(
-            cx,
-            cy,
-            slice_count,
-            hovered,
-            hover_factor,
-            self.menu.anim.reveal_progress,
-        );
+        let modal_active = self.folder_browser.is_some() || self.customizer.is_some();
 
-        for (i, path, _p) in animated_wedges {
-            let is_hovered = i as i32 == hovered;
-            let is_parent_of_sub = i as i32 == self.menu.parent_slice_index && self.menu.active_sub_tier.is_some();
-            let mut paint = Paint::default();
-            paint.anti_alias = true;
+        if !modal_active {
+            // 1. Draw Main Ring Wedges (with blossom animation & frosted glass styling)
+            let animated_wedges = build_main_ring_paths_animated(
+                cx,
+                cy,
+                slice_count,
+                hovered,
+                hover_factor,
+                self.menu.anim.reveal_progress,
+            );
 
-            if is_hovered || is_parent_of_sub {
-                let light_col = lighten_color(primary_col, 1.35);
-                let dark_col = darken_color(primary_col, 1.15);
+            for (i, path, _p) in animated_wedges {
+                let is_hovered = i as i32 == hovered;
+                let is_parent_of_sub = i as i32 == self.menu.parent_slice_index && self.menu.active_sub_tier.is_some();
+                let mut paint = Paint::default();
+                paint.anti_alias = true;
 
-                let grad = RadialGradient::new(
-                    Point::from_xy(cx, cy),
-                    Point::from_xy(cx, cy),
-                    SLICE_OUTER_R + 10.0,
-                    vec![
-                        GradientStop::new(0.0, light_col),
-                        GradientStop::new(0.35, primary_col),
-                        GradientStop::new(1.0, dark_col),
-                    ],
-                    SpreadMode::Pad,
-                    SkTransform::identity(),
-                );
-                if let Some(shader) = grad {
-                    paint.shader = shader;
+                if is_hovered || is_parent_of_sub {
+                    let light_col = lighten_color(primary_col, 1.35);
+                    let dark_col = darken_color(primary_col, 1.15);
+
+                    let grad = RadialGradient::new(
+                        Point::from_xy(cx, cy),
+                        Point::from_xy(cx, cy),
+                        SLICE_OUTER_R + 10.0,
+                        vec![
+                            GradientStop::new(0.0, light_col),
+                            GradientStop::new(0.35, primary_col),
+                            GradientStop::new(1.0, dark_col),
+                        ],
+                        SpreadMode::Pad,
+                        SkTransform::identity(),
+                    );
+                    if let Some(shader) = grad {
+                        paint.shader = shader;
+                    } else {
+                        paint.set_color(primary_col);
+                    }
+                    pixmap.fill_path(&path, &paint, tiny_skia::FillRule::Winding, SkTransform::identity(), None);
+
+                    let mut stroke_paint = Paint::default();
+                    stroke_paint.set_color(light_col);
+                    stroke_paint.anti_alias = true;
+                    let stroke = Stroke { width: 1.6, ..Default::default() };
+                    pixmap.stroke_path(&path, &stroke_paint, &stroke, SkTransform::identity(), None);
                 } else {
-                    paint.set_color(primary_col);
+                    // Neutral frosted charcoal gradient matching QML:
+                    // Inner: (0.07, 0.07, 0.08, 0.44), Outer: (0.04, 0.04, 0.05, 0.34)
+                    let (stop0, stop1) = if self.menu.is_low_end_gpu {
+                        (
+                            Color::from_rgba(0.10, 0.10, 0.12, 0.88).unwrap_or(Color::BLACK),
+                            Color::from_rgba(0.06, 0.06, 0.08, 0.82).unwrap_or(Color::BLACK),
+                        )
+                    } else {
+                        (
+                            Color::from_rgba(0.07, 0.07, 0.08, 0.44).unwrap_or(Color::BLACK),
+                            Color::from_rgba(0.04, 0.04, 0.05, 0.34).unwrap_or(Color::BLACK),
+                        )
+                    };
+
+                    let grad = RadialGradient::new(
+                        Point::from_xy(cx, cy),
+                        Point::from_xy(cx, cy),
+                        SLICE_OUTER_R,
+                        vec![
+                            GradientStop::new(0.0, stop0),
+                            GradientStop::new(1.0, stop1),
+                        ],
+                        SpreadMode::Pad,
+                        SkTransform::identity(),
+                    );
+                    if let Some(shader) = grad {
+                        paint.shader = shader;
+                    } else {
+                        paint.set_color(stop0);
+                    }
+                    pixmap.fill_path(&path, &paint, tiny_skia::FillRule::Winding, SkTransform::identity(), None);
+
+                    // Subtle white sheen
+                    let mut sheen_paint = Paint::default();
+                    sheen_paint.set_color(Color::from_rgba(1.0, 1.0, 1.0, 0.04).unwrap_or(Color::WHITE));
+                    sheen_paint.anti_alias = true;
+                    pixmap.fill_path(&path, &sheen_paint, tiny_skia::FillRule::Winding, SkTransform::identity(), None);
+
+                    // Crisp soft white translucent border
+                    let mut stroke_paint = Paint::default();
+                    stroke_paint.set_color(Color::from_rgba(1.0, 1.0, 1.0, 0.22).unwrap_or(Color::WHITE));
+                    stroke_paint.anti_alias = true;
+                    let stroke = Stroke { width: 1.0, ..Default::default() };
+                    pixmap.stroke_path(&path, &stroke_paint, &stroke, SkTransform::identity(), None);
                 }
-                pixmap.fill_path(&path, &paint, tiny_skia::FillRule::Winding, SkTransform::identity(), None);
+            }
 
-                let mut stroke_paint = Paint::default();
-                stroke_paint.set_color(light_col);
-                stroke_paint.anti_alias = true;
-                let stroke = Stroke { width: 1.6, ..Default::default() };
-                pixmap.stroke_path(&path, &stroke_paint, &stroke, SkTransform::identity(), None);
-            } else {
-                // Neutral frosted charcoal gradient matching QML:
-                // Inner: (0.07, 0.07, 0.08, 0.44), Outer: (0.04, 0.04, 0.05, 0.34)
-                let (stop0, stop1) = if self.menu.is_low_end_gpu {
-                    (
-                        Color::from_rgba(0.10, 0.10, 0.12, 0.88).unwrap_or(Color::BLACK),
-                        Color::from_rgba(0.06, 0.06, 0.08, 0.82).unwrap_or(Color::BLACK),
-                    )
-                } else {
-                    (
-                        Color::from_rgba(0.07, 0.07, 0.08, 0.44).unwrap_or(Color::BLACK),
-                        Color::from_rgba(0.04, 0.04, 0.05, 0.34).unwrap_or(Color::BLACK),
-                    )
-                };
-
-                let grad = RadialGradient::new(
-                    Point::from_xy(cx, cy),
-                    Point::from_xy(cx, cy),
-                    SLICE_OUTER_R,
-                    vec![
-                        GradientStop::new(0.0, stop0),
-                        GradientStop::new(1.0, stop1),
-                    ],
-                    SpreadMode::Pad,
-                    SkTransform::identity(),
-                );
-                if let Some(shader) = grad {
-                    paint.shader = shader;
-                } else {
-                    paint.set_color(stop0);
+            // 2. Draw Main Ring Icons & Number Badges
+            let slice_angle = 360.0 / slice_count as f32;
+            for (i, slice) in self.menu.current_slices.iter().enumerate() {
+                let p = (self.menu.anim.reveal_progress - i as f32).clamp(0.0, 1.0);
+                if p <= 0.01 {
+                    continue;
                 }
-                pixmap.fill_path(&path, &paint, tiny_skia::FillRule::Winding, SkTransform::identity(), None);
+                let ease = if p >= 1.0 { 1.0 } else { 1.0 - (1.0 - p).powi(3) };
 
-                // Subtle white sheen
-                let mut sheen_paint = Paint::default();
-                sheen_paint.set_color(Color::from_rgba(1.0, 1.0, 1.0, 0.04).unwrap_or(Color::WHITE));
-                sheen_paint.anti_alias = true;
-                pixmap.fill_path(&path, &sheen_paint, tiny_skia::FillRule::Winding, SkTransform::identity(), None);
+                let disp = get_slice_displacement(i as i32, slice_count as i32, hovered, hover_factor);
+                let base_start = i as f32 * slice_angle - 90.0;
+                let base_end = (i as f32 + 1.0) * slice_angle - 90.0;
 
-                // Crisp soft white translucent border
-                let mut stroke_paint = Paint::default();
-                stroke_paint.set_color(Color::from_rgba(1.0, 1.0, 1.0, 0.22).unwrap_or(Color::WHITE));
-                stroke_paint.anti_alias = true;
-                let stroke = Stroke { width: 1.0, ..Default::default() };
-                pixmap.stroke_path(&path, &stroke_paint, &stroke, SkTransform::identity(), None);
+                let cur_start = base_start + disp.start_shift;
+                let cur_end = base_end + disp.end_shift;
+                let mid_rad = ((cur_start + cur_end) / 2.0).to_radians();
+
+                let base_icon_r = ICON_RADIUS * ease;
+                let icon_r = base_icon_r + disp.r_shift / 2.0;
+                let icon_x = cx + icon_r * mid_rad.cos();
+                let icon_y = cy + icon_r * mid_rad.sin();
+
+                let is_hov = i as i32 == hovered || (i as i32 == self.menu.parent_slice_index && self.menu.active_sub_tier.is_some());
+                let icon_base_col = if is_hov { on_primary_col } else { Color::from_rgba8(255, 255, 255, 240) };
+                let icon_col = Color::from_rgba(
+                    icon_base_col.red(),
+                    icon_base_col.green(),
+                    icon_base_col.blue(),
+                    icon_base_col.alpha() * p,
+                ).unwrap_or(icon_base_col);
+
+                let icon_size = (if is_hov { 28.0 } else { 24.0 }) * ease;
+                draw_icon(&mut self.font_renderer, pixmap, &slice.icon, icon_x, icon_y, icon_size, icon_col);
+
+                if i < 9 && p >= 0.5 {
+                    let badge_x = icon_x + 12.0;
+                    let badge_y = icon_y - 12.0;
+                    draw_number_badge(&mut self.font_renderer, pixmap, i + 1, badge_x, badge_y, is_hov, primary_col, on_primary_col);
+                }
             }
-        }
 
-        // 2. Draw Main Ring Icons & Number Badges
-        let slice_angle = 360.0 / slice_count as f32;
-        for (i, slice) in self.menu.current_slices.iter().enumerate() {
-            let p = (self.menu.anim.reveal_progress - i as f32).clamp(0.0, 1.0);
-            if p <= 0.01 {
-                continue;
+            // 3. Draw Sub-Ring if active
+            if self.menu.active_sub_tier.is_some() && !self.menu.sub_slices.is_empty() {
+                let sub_start_deg = self.menu.sub_start_angle();
+                let sub_width_deg = self.menu.sub_slice_width();
+                draw_sub_ring_with_icons(
+                    &mut self.font_renderer,
+                    pixmap,
+                    cx,
+                    cy,
+                    &self.menu.sub_slices,
+                    sub_start_deg,
+                    sub_width_deg,
+                    self.menu.outer_hovered_index,
+                    self.menu.anim.outer_hover_factor,
+                    self.menu.anim.sub_reveal_progress,
+                    primary_col,
+                    on_primary_col,
+                    self.menu.is_low_end_gpu,
+                );
             }
-            let ease = if p >= 1.0 { 1.0 } else { 1.0 - (1.0 - p).powi(3) };
 
-            let disp = get_slice_displacement(i as i32, slice_count as i32, hovered, hover_factor);
-            let base_start = i as f32 * slice_angle - 90.0;
-            let base_end = (i as f32 + 1.0) * slice_angle - 90.0;
-
-            let cur_start = base_start + disp.start_shift;
-            let cur_end = base_end + disp.end_shift;
-            let mid_rad = ((cur_start + cur_end) / 2.0).to_radians();
-
-            let base_icon_r = ICON_RADIUS * ease;
-            let icon_r = base_icon_r + disp.r_shift / 2.0;
-            let icon_x = cx + icon_r * mid_rad.cos();
-            let icon_y = cy + icon_r * mid_rad.sin();
-
-            let is_hov = i as i32 == hovered || (i as i32 == self.menu.parent_slice_index && self.menu.active_sub_tier.is_some());
-            let icon_base_col = if is_hov { on_primary_col } else { Color::from_rgba8(255, 255, 255, 240) };
-            let icon_col = Color::from_rgba(
-                icon_base_col.red(),
-                icon_base_col.green(),
-                icon_base_col.blue(),
-                icon_base_col.alpha() * p,
-            ).unwrap_or(icon_base_col);
-
-            let icon_size = (if is_hov { 28.0 } else { 24.0 }) * ease;
-            draw_icon(&mut self.font_renderer, pixmap, &slice.icon, icon_x, icon_y, icon_size, icon_col);
-
-            if i < 9 && p >= 0.5 {
-                let badge_x = icon_x + 12.0;
-                let badge_y = icon_y - 12.0;
-                draw_number_badge(&mut self.font_renderer, pixmap, i + 1, badge_x, badge_y, is_hov, primary_col, on_primary_col);
-            }
-        }
-
-        // 3. Draw Sub-Ring if active
-        if self.menu.active_sub_tier.is_some() && !self.menu.sub_slices.is_empty() {
-            let sub_start_deg = self.menu.sub_start_angle();
-            let sub_width_deg = self.menu.sub_slice_width();
-            draw_sub_ring_with_icons(
+            // 4. Draw Center Hub
+            let hub_label = self.menu.active_hover_label();
+            draw_center_hub(
                 &mut self.font_renderer,
                 pixmap,
                 cx,
                 cy,
-                &self.menu.sub_slices,
-                sub_start_deg,
-                sub_width_deg,
-                self.menu.outer_hovered_index,
-                self.menu.anim.outer_hover_factor,
-                self.menu.anim.sub_reveal_progress,
+                44.0,
+                &hub_label,
+                self.menu.center_hovered,
+                self.menu.anim.hub_scale,
                 primary_col,
-                on_primary_col,
                 self.menu.is_low_end_gpu,
             );
         }
 
-        // 4. Draw Center Hub
-        let hub_label = self.menu.active_hover_label();
-        draw_center_hub(
-            &mut self.font_renderer,
-            pixmap,
-            cx,
-            cy,
-            44.0,
-            &hub_label,
-            self.menu.center_hovered,
-            self.menu.anim.hub_scale,
-            primary_col,
-            self.menu.is_low_end_gpu,
-        );
-
         // 5. Draw Folder Browser modal or Customizer modal if active
+        let surface_hex = self.menu.config.colors.as_ref().map(|c| c.surface_hex()).unwrap_or("#141313");
+        let subtext_hex = self.menu.config.colors.as_ref().map(|c| c.subtext_hex()).unwrap_or("#948f94");
+        let customizer_colors = CustomizerColors {
+            primary: primary_col,
+            on_primary: on_primary_col,
+            on_surface: parse_hex_color("#e3e2e2"),
+            subtext: parse_hex_color(subtext_hex),
+            card_bg: parse_hex_color(surface_hex),
+            surface_base: parse_hex_color(surface_hex),
+        };
+
         if let Some(folder_state) = &self.folder_browser {
             renderer::folder_browser::render_folder_browser_with_font(
                 folder_state,
@@ -1423,18 +1443,10 @@ impl App {
                 self.menu.center_x,
                 self.menu.center_y,
                 &mut self.font_renderer,
+                customizer_colors,
             );
         } else if let Some(customizer_state) = &self.customizer {
             let cat = state::actions::function_catalogue();
-            let surface_hex = self.menu.config.colors.as_ref().map(|c| c.surface_hex()).unwrap_or("#141313");
-            let subtext_hex = self.menu.config.colors.as_ref().map(|c| c.subtext_hex()).unwrap_or("#948f94");
-            let customizer_colors = CustomizerColors {
-                primary: primary_col,
-                on_primary: on_primary_col,
-                on_surface: parse_hex_color("#e3e2e2"),
-                subtext: parse_hex_color(subtext_hex),
-                card_bg: parse_hex_color(surface_hex),
-            };
             let active_ids: Vec<String> = self.menu.current_slices.iter().map(|s| s.id.clone()).collect();
             renderer::customizer::render_customizer_with_font(
                 customizer_state,

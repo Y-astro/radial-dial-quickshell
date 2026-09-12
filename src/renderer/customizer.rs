@@ -5,7 +5,10 @@ use crate::font::FontRenderer;
 use crate::renderer::text::{draw_icon, draw_text, draw_text_left};
 use crate::state::actions::ActionDef;
 use crate::state::config::FileJumpTarget;
-use tiny_skia::{Color, FillRule, Paint, PathBuilder, Pixmap, Stroke, Transform};
+use tiny_skia::{
+    Color, FillRule, GradientStop, LinearGradient, Paint, PathBuilder, Pixmap, Point, SpreadMode,
+    Stroke, Transform,
+};
 
 pub const CARD_W: f32 = 480.0;
 pub const CARD_H: f32 = 540.0;
@@ -55,12 +58,12 @@ pub fn col_card_border() -> Color {
 
 #[inline]
 pub fn col_input_bg() -> Color {
-    Color::from_rgba8(0, 0, 0, 89) // 35% black
+    Color::from_rgba8(0, 0, 0, 56) // 22% black translucent cutout
 }
 
 #[inline]
 pub fn col_input_border() -> Color {
-    Color::from_rgba8(255, 255, 255, 36) // 14% white
+    Color::from_rgba(1.0, 1.0, 1.0, 0.12).unwrap_or(Color::WHITE)
 }
 
 #[inline]
@@ -75,6 +78,7 @@ pub struct CustomizerColors {
     pub on_surface: Color,
     pub subtext: Color,
     pub card_bg: Color,
+    pub surface_base: Color,
 }
 
 impl Default for CustomizerColors {
@@ -85,6 +89,7 @@ impl Default for CustomizerColors {
             on_surface: col_on_surface(),
             subtext: col_subtext(),
             card_bg: col_card_bg(),
+            surface_base: col_card_bg(),
         }
     }
 }
@@ -362,45 +367,86 @@ pub fn render_customizer_with_font(
     let card_x = base_card_x + (base_card_w - card_w) / 2.0;
     let card_y = base_card_y + (base_card_h - card_h) / 2.0;
 
-    // Subtle drop shadow outline
-    stroke_rounded_rect(
-        pixmap,
-        card_x - 1.0,
-        card_y - 1.0,
-        card_w + 2.0,
-        card_h + 2.0,
-        CARD_RADIUS + 1.0,
-        Color::from_rgba8(0, 0, 0, 80),
-        3.0,
-    );
+    if let Some(card_path) = rounded_rect_path(card_x, card_y, card_w, card_h, CARD_RADIUS) {
+        // Subtle drop shadow outline
+        stroke_rounded_rect(
+            pixmap,
+            card_x - 1.0,
+            card_y - 1.0,
+            card_w + 2.0,
+            card_h + 2.0,
+            CARD_RADIUS + 1.0,
+            Color::from_rgba8(0, 0, 0, 60),
+            2.0,
+        );
 
-    // Card background fill
-    fill_rounded_rect(pixmap, card_x, card_y, card_w, card_h, CARD_RADIUS, colors.card_bg);
+        // Translucent Frosted Glass Base Fill (vertical gradient matching QML & radial menu blur)
+        // Alpha ~0.48 top to ~0.42 bottom allows Hyprland compositor blur to show through without darkening
+        let surface = colors.surface_base;
+        let card_bg_top = Color::from_rgba(
+            (surface.red() * 1.08).min(1.0),
+            (surface.green() * 1.08).min(1.0),
+            (surface.blue() * 1.08).min(1.0),
+            0.48,
+        ).unwrap_or(Color::from_rgba8(20, 22, 22, 122));
 
-    // Card border
-    stroke_rounded_rect(
-        pixmap,
-        card_x,
-        card_y,
-        card_w,
-        card_h,
-        CARD_RADIUS,
-        Color::from_rgba8(255, 255, 255, 36),
-        1.5,
-    );
+        let card_bg_bottom = Color::from_rgba(
+            (surface.red() * 0.92).min(1.0),
+            (surface.green() * 0.92).min(1.0),
+            (surface.blue() * 0.92).min(1.0),
+            0.42,
+        ).unwrap_or(Color::from_rgba8(14, 16, 16, 107));
 
-    // Top frosted highlight reflection
-    let mut highlight_pb = PathBuilder::new();
-    highlight_pb.move_to(card_x + CARD_RADIUS, card_y + 1.5);
-    highlight_pb.line_to(card_x + card_w - CARD_RADIUS, card_y + 1.5);
-    if let Some(p) = highlight_pb.finish() {
-        let mut paint = Paint::default();
-        paint.set_color(Color::from_rgba8(255, 255, 255, 45));
-        let stroke = Stroke {
-            width: 1.0,
-            ..Default::default()
-        };
-        pixmap.stroke_path(&p, &paint, &stroke, Transform::identity(), None);
+        let mut bg_paint = Paint::default();
+        bg_paint.anti_alias = true;
+        let grad = LinearGradient::new(
+            Point::from_xy(card_x, card_y),
+            Point::from_xy(card_x, card_y + card_h),
+            vec![
+                GradientStop::new(0.0, card_bg_top),
+                GradientStop::new(1.0, card_bg_bottom),
+            ],
+            SpreadMode::Pad,
+            Transform::identity(),
+        );
+        if let Some(shader) = grad {
+            bg_paint.shader = shader;
+        } else {
+            bg_paint.set_color(card_bg_top);
+        }
+        pixmap.fill_path(&card_path, &bg_paint, FillRule::Winding, Transform::identity(), None);
+
+        // Subtle white sheen
+        let mut sheen_paint = Paint::default();
+        sheen_paint.set_color(Color::from_rgba(1.0, 1.0, 1.0, 0.03).unwrap_or(Color::WHITE));
+        sheen_paint.anti_alias = true;
+        pixmap.fill_path(&card_path, &sheen_paint, FillRule::Winding, Transform::identity(), None);
+
+        // Crisp soft white translucent border
+        stroke_rounded_rect(
+            pixmap,
+            card_x,
+            card_y,
+            card_w,
+            card_h,
+            CARD_RADIUS,
+            Color::from_rgba(1.0, 1.0, 1.0, 0.18).unwrap_or(Color::WHITE),
+            1.5,
+        );
+
+        // Top frosted highlight reflection
+        let mut highlight_pb = PathBuilder::new();
+        highlight_pb.move_to(card_x + CARD_RADIUS, card_y + 1.5);
+        highlight_pb.line_to(card_x + card_w - CARD_RADIUS, card_y + 1.5);
+        if let Some(p) = highlight_pb.finish() {
+            let mut paint = Paint::default();
+            paint.set_color(Color::from_rgba(1.0, 1.0, 1.0, 0.20).unwrap_or(Color::WHITE));
+            let stroke = Stroke {
+                width: 1.5,
+                ..Default::default()
+            };
+            pixmap.stroke_path(&p, &paint, &stroke, Transform::identity(), None);
+        }
     }
 
     // 3. Title Bar / Header (mode description & close button)
@@ -1143,7 +1189,7 @@ fn render_file_target_body(
         browse_w,
         path_box_h,
         10.0,
-        Color::from_rgba8(255, 255, 255, 20),
+        Color::from_rgba(1.0, 1.0, 1.0, 0.08).unwrap_or(Color::BLACK),
     );
     stroke_rounded_rect(
         pixmap,
@@ -1152,29 +1198,29 @@ fn render_file_target_body(
         browse_w,
         path_box_h,
         10.0,
-        Color::from_rgba8(255, 255, 255, 46),
+        Color::from_rgba(1.0, 1.0, 1.0, 0.14).unwrap_or(Color::WHITE),
         1.0,
     );
     draw_icon(
         font_renderer,
         pixmap,
         "folder_open",
-        browse_x + 22.0,
+        browse_x + 20.0,
         path_box_y + path_box_h / 2.0,
         16.0,
-        colors.primary,
+        colors.on_surface,
     );
     draw_text_left(
         font_renderer,
         pixmap,
         "Browse",
-        browse_x + 38.0,
+        browse_x + 36.0,
         path_box_y + path_box_h / 2.0,
         11.0,
         colors.on_surface,
     );
 
-    // 3. Choose Icon Picker Grid (2 rows of 8 icons)
+    // 3. Choose Icon Picker Grid (Flow layout: 10 columns matching shell reference)
     let icon_hdr_y = card_y + 208.0;
     draw_text_left(
         font_renderer,
@@ -1187,27 +1233,26 @@ fn render_file_target_body(
     );
 
     let grid_y = card_y + 226.0;
-    let cols = 8;
-    let gap_x = 8.0;
-    let gap_y = 8.0;
-    let icon_w = (content_w - (cols as f32 - 1.0) * gap_x) / cols as f32;
-    let icon_h = 38.0;
+    let cols = 10;
+    let chip_w = 36.0;
+    let chip_h = 36.0;
+    let gap = 8.0;
 
     for (idx, icon_name) in AVAILABLE_ICONS.iter().enumerate() {
         let row = idx / cols;
         let col = idx % cols;
-        let ix = content_x + col as f32 * (icon_w + gap_x);
-        let iy = grid_y + row as f32 * (icon_h + gap_y);
+        let ix = content_x + col as f32 * (chip_w + gap);
+        let iy = grid_y + row as f32 * (chip_h + gap);
         let is_selected = state.input_icon == *icon_name;
 
         if is_selected {
-            fill_rounded_rect(pixmap, ix, iy, icon_w, icon_h, 10.0, colors.primary);
+            fill_rounded_rect(pixmap, ix, iy, chip_w, chip_h, 10.0, colors.primary);
             draw_icon(
                 font_renderer,
                 pixmap,
                 icon_name,
-                ix + icon_w / 2.0,
-                iy + icon_h / 2.0,
+                ix + chip_w / 2.0,
+                iy + chip_h / 2.0,
                 20.0,
                 colors.on_primary,
             );
@@ -1216,27 +1261,27 @@ fn render_file_target_body(
                 pixmap,
                 ix,
                 iy,
-                icon_w,
-                icon_h,
+                chip_w,
+                chip_h,
                 10.0,
-                Color::from_rgba8(255, 255, 255, 13),
+                Color::from_rgba(1.0, 1.0, 1.0, 0.05).unwrap_or(Color::BLACK),
             );
             stroke_rounded_rect(
                 pixmap,
                 ix,
                 iy,
-                icon_w,
-                icon_h,
+                chip_w,
+                chip_h,
                 10.0,
-                Color::from_rgba8(255, 255, 255, 30),
+                Color::from_rgba(1.0, 1.0, 1.0, 0.12).unwrap_or(Color::WHITE),
                 1.0,
             );
             draw_icon(
                 font_renderer,
                 pixmap,
                 icon_name,
-                ix + icon_w / 2.0,
-                iy + icon_h / 2.0,
+                ix + chip_w / 2.0,
+                iy + chip_h / 2.0,
                 20.0,
                 colors.on_surface,
             );
@@ -1291,7 +1336,7 @@ fn render_file_target_body(
 
     // Cancel and Save buttons on the right
     let cancel_w = 80.0;
-    let save_w = 110.0;
+    let save_w = 106.0;
     let save_x = content_x + content_w - save_w;
     let cancel_x = save_x - cancel_w - 8.0;
 
@@ -1303,7 +1348,7 @@ fn render_file_target_body(
         cancel_w,
         btns_h,
         10.0,
-        Color::from_rgba8(255, 255, 255, 20),
+        Color::from_rgba(1.0, 1.0, 1.0, 0.08).unwrap_or(Color::BLACK),
     );
     stroke_rounded_rect(
         pixmap,
@@ -1312,7 +1357,7 @@ fn render_file_target_body(
         cancel_w,
         btns_h,
         10.0,
-        Color::from_rgba8(255, 255, 255, 40),
+        Color::from_rgba(1.0, 1.0, 1.0, 0.16).unwrap_or(Color::WHITE),
         1.0,
     );
     draw_text(
@@ -1331,7 +1376,7 @@ fn render_file_target_body(
         font_renderer,
         pixmap,
         "check",
-        save_x + 22.0,
+        save_x + 18.0,
         btns_y + btns_h / 2.0,
         16.0,
         colors.on_primary,
@@ -1345,7 +1390,7 @@ fn render_file_target_body(
         font_renderer,
         pixmap,
         save_text,
-        save_x + 36.0,
+        save_x + 32.0,
         btns_y + btns_h / 2.0,
         12.0,
         colors.on_primary,

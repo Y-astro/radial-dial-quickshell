@@ -8,8 +8,12 @@
 
 use crate::font::FontRenderer;
 use crate::ipc::folder::{DirListing, FolderEntry, PlaceEntry};
+use crate::renderer::customizer::CustomizerColors;
 use crate::renderer::text::{draw_icon, draw_text, draw_text_left};
-use tiny_skia::{Color, FillRule, Paint, PathBuilder, Pixmap, Stroke, Transform};
+use tiny_skia::{
+    Color, FillRule, GradientStop, LinearGradient, Paint, PathBuilder, Pixmap, Point, SpreadMode,
+    Stroke, Transform,
+};
 
 #[derive(Debug, Clone, Default)]
 pub struct FolderBrowserState {
@@ -211,9 +215,10 @@ pub fn render_folder_browser(
     screen_h: f32,
     anchor_x: f32,
     anchor_y: f32,
+    colors: CustomizerColors,
 ) {
     let mut font_renderer = FontRenderer::new();
-    render_folder_browser_with_font(state, pixmap, screen_w, screen_h, anchor_x, anchor_y, &mut font_renderer);
+    render_folder_browser_with_font(state, pixmap, screen_w, screen_h, anchor_x, anchor_y, &mut font_renderer, colors);
 }
 
 /// Render the folder browser modal dialog reusing an existing `FontRenderer`.
@@ -225,16 +230,18 @@ pub fn render_folder_browser_with_font(
     anchor_x: f32,
     anchor_y: f32,
     font_renderer: &mut FontRenderer,
+    colors: CustomizerColors,
 ) {
     if !state.is_open {
         return;
     }
 
-    // Material theme palette matching radial-dial and RadialMenuFolderBrowser.qml
-    let col_primary = Color::from_rgba8(137, 180, 250, 255); // Catppuccin Blue / Sapphire
-    let col_on_primary = Color::from_rgba8(17, 17, 27, 255);  // Deep contrast dark
-    let col_on_surface = Color::from_rgba8(205, 214, 244, 255); // Catppuccin Text
-    let col_subtext = Color::from_rgba8(166, 173, 200, 200);   // Catppuccin Subtext
+    // Material theme palette matching radial-dial and system colors
+    let col_primary = colors.primary;
+    let col_on_primary = colors.on_primary;
+    let col_on_surface = colors.on_surface;
+    let col_subtext = colors.subtext;
+    let surface = colors.surface_base;
 
     // Animation progress (0.01 to 1.0)
     let anim_t = state.anim_progress.clamp(0.01, 1.0);
@@ -254,32 +261,87 @@ pub fn render_folder_browser_with_font(
     let card_y = base_card_y + (base_card_h - card_h) / 2.0;
     let card_radius = 22.0;
 
-    // Card background fill & border
-    let card_bg = Color::from_rgba(0.09, 0.09, 0.13, 0.96).unwrap_or(Color::BLACK);
-    let card_border = Color::from_rgba(1.0, 1.0, 1.0, 0.18).unwrap_or(Color::WHITE);
-    draw_rounded_rect(
-        pixmap,
-        card_x,
-        card_y,
-        card_w,
-        card_h,
-        card_radius,
-        card_bg,
-        Some((card_border, 1.5)),
-    );
+    // Translucent Frosted Glass Base Fill (vertical gradient matching customizer & radial menu blur)
+    let mut card_pb = PathBuilder::new();
+    add_rounded_rect(&mut card_pb, card_x, card_y, card_w, card_h, card_radius);
+    if let Some(card_path) = card_pb.finish() {
+        // Subtle drop shadow outline
+        draw_rounded_rect(
+            pixmap,
+            card_x - 1.0,
+            card_y - 1.0,
+            card_w + 2.0,
+            card_h + 2.0,
+            card_radius + 1.0,
+            Color::TRANSPARENT,
+            Some((Color::from_rgba8(0, 0, 0, 60), 2.0)),
+        );
 
-    // Subtle top frosted highlight line
-    let highlight_col = Color::from_rgba(1.0, 1.0, 1.0, 0.16).unwrap_or(Color::WHITE);
-    draw_rounded_rect(
-        pixmap,
-        card_x + 1.0,
-        card_y + 1.0,
-        card_w - 2.0,
-        2.0,
-        1.0,
-        highlight_col,
-        None,
-    );
+        let card_bg_top = Color::from_rgba(
+            (surface.red() * 1.08).min(1.0),
+            (surface.green() * 1.08).min(1.0),
+            (surface.blue() * 1.08).min(1.0),
+            0.48,
+        ).unwrap_or(Color::from_rgba8(20, 22, 22, 122));
+
+        let card_bg_bottom = Color::from_rgba(
+            (surface.red() * 0.92).min(1.0),
+            (surface.green() * 0.92).min(1.0),
+            (surface.blue() * 0.92).min(1.0),
+            0.42,
+        ).unwrap_or(Color::from_rgba8(14, 16, 16, 107));
+
+        let mut bg_paint = Paint::default();
+        bg_paint.anti_alias = true;
+        let grad = LinearGradient::new(
+            Point::from_xy(card_x, card_y),
+            Point::from_xy(card_x, card_y + card_h),
+            vec![
+                GradientStop::new(0.0, card_bg_top),
+                GradientStop::new(1.0, card_bg_bottom),
+            ],
+            SpreadMode::Pad,
+            Transform::identity(),
+        );
+        if let Some(shader) = grad {
+            bg_paint.shader = shader;
+        } else {
+            bg_paint.set_color(card_bg_top);
+        }
+        pixmap.fill_path(&card_path, &bg_paint, FillRule::Winding, Transform::identity(), None);
+
+        // Subtle white sheen
+        let mut sheen_paint = Paint::default();
+        sheen_paint.set_color(Color::from_rgba(1.0, 1.0, 1.0, 0.03).unwrap_or(Color::WHITE));
+        sheen_paint.anti_alias = true;
+        pixmap.fill_path(&card_path, &sheen_paint, FillRule::Winding, Transform::identity(), None);
+
+        // Crisp soft white translucent border
+        draw_rounded_rect(
+            pixmap,
+            card_x,
+            card_y,
+            card_w,
+            card_h,
+            card_radius,
+            Color::TRANSPARENT,
+            Some((Color::from_rgba(1.0, 1.0, 1.0, 0.18).unwrap_or(Color::WHITE), 1.5)),
+        );
+
+        // Top frosted highlight reflection
+        let mut highlight_pb = PathBuilder::new();
+        highlight_pb.move_to(card_x + card_radius, card_y + 1.5);
+        highlight_pb.line_to(card_x + card_w - card_radius, card_y + 1.5);
+        if let Some(p) = highlight_pb.finish() {
+            let mut paint = Paint::default();
+            paint.set_color(Color::from_rgba(1.0, 1.0, 1.0, 0.20).unwrap_or(Color::WHITE));
+            let stroke = Stroke {
+                width: 1.5,
+                ..Default::default()
+            };
+            pixmap.stroke_path(&p, &paint, &stroke, Transform::identity(), None);
+        }
+    }
 
     let margin = 18.0;
     let content_w = card_w - margin * 2.0;
@@ -358,7 +420,7 @@ pub fn render_folder_browser_with_font(
         close_size,
         16.0,
         close_bg,
-        None,
+        Some((Color::from_rgba(1.0, 1.0, 1.0, 0.14).unwrap_or(Color::WHITE), 1.0)),
     );
     draw_icon(
         font_renderer,
@@ -373,7 +435,7 @@ pub fn render_folder_browser_with_font(
     // 4. Breadcrumb / Path Bar
     let path_bar_y = card_y + 60.0;
     let path_bar_h = 36.0;
-    let path_box_bg = Color::from_rgba(0.0, 0.0, 0.0, 0.35).unwrap_or(Color::BLACK);
+    let path_box_bg = Color::from_rgba8(0, 0, 0, 56);
     let path_box_border = Color::from_rgba(1.0, 1.0, 1.0, 0.12).unwrap_or(Color::WHITE);
     draw_rounded_rect(
         pixmap,
@@ -436,7 +498,7 @@ pub fn render_folder_browser_with_font(
     let chip_h = 28.0;
 
     for place in &state.places {
-        let chip_w = (place.name.len() as f32 * 7.5 + 32.0).clamp(65.0, 120.0);
+        let chip_w = (place.name.len() as f32 * 6.5 + 28.0).clamp(58.0, 92.0);
         if chip_x + chip_w > card_x + card_w - margin {
             break;
         }
@@ -471,7 +533,7 @@ pub fn render_folder_browser_with_font(
             font_renderer,
             pixmap,
             &place.icon,
-            chip_x + 14.0,
+            chip_x + 13.0,
             places_y + 14.0,
             14.0,
             icon_color,
@@ -480,9 +542,9 @@ pub fn render_folder_browser_with_font(
             font_renderer,
             pixmap,
             &place.name,
-            chip_x + 26.0,
+            chip_x + 23.0,
             places_y + 14.0,
-            11.0,
+            10.5,
             text_color,
         );
 
@@ -492,8 +554,8 @@ pub fn render_folder_browser_with_font(
     // 6. Search Filter Input Bar
     let filter_y = card_y + 140.0;
     let filter_h = 32.0;
-    let filter_box_bg = Color::from_rgba(0.0, 0.0, 0.0, 0.30).unwrap_or(Color::BLACK);
-    let filter_border = Color::from_rgba(1.0, 1.0, 1.0, 0.14).unwrap_or(Color::WHITE);
+    let filter_box_bg = Color::from_rgba8(0, 0, 0, 56);
+    let filter_border = Color::from_rgba(1.0, 1.0, 1.0, 0.12).unwrap_or(Color::WHITE);
     draw_rounded_rect(
         pixmap,
         card_x + margin,
@@ -554,8 +616,8 @@ pub fn render_folder_browser_with_font(
     let list_y = card_y + 180.0;
     let bottom_bar_h = 54.0;
     let list_h = card_h - (list_y - card_y) - bottom_bar_h;
-    let list_bg = Color::from_rgba(0.0, 0.0, 0.0, 0.32).unwrap_or(Color::BLACK);
-    let list_border = Color::from_rgba(1.0, 1.0, 1.0, 0.12).unwrap_or(Color::WHITE);
+    let list_bg = Color::from_rgba8(0, 0, 0, 51);
+    let list_border = Color::from_rgba(1.0, 1.0, 1.0, 0.10).unwrap_or(Color::WHITE);
     draw_rounded_rect(
         pixmap,
         card_x + margin,
@@ -797,7 +859,7 @@ mod tests {
         let mut pixmap = Pixmap::new(800, 600).unwrap();
         pixmap.fill(Color::TRANSPARENT);
 
-        render_folder_browser(&state, &mut pixmap, 800.0, 600.0, 400.0, 300.0);
+        render_folder_browser(&state, &mut pixmap, 800.0, 600.0, 400.0, 300.0, CustomizerColors::default());
 
         let non_zero = pixmap.pixels().iter().filter(|p| p.alpha() > 0).count();
         assert_eq!(non_zero, 0, "Closed folder browser should render nothing");
@@ -842,7 +904,7 @@ mod tests {
         let mut pixmap = Pixmap::new(800, 600).unwrap();
         pixmap.fill(Color::TRANSPARENT);
 
-        render_folder_browser(&state, &mut pixmap, 800.0, 600.0, 400.0, 300.0);
+        render_folder_browser(&state, &mut pixmap, 800.0, 600.0, 400.0, 300.0, CustomizerColors::default());
 
         let non_zero = pixmap.pixels().iter().filter(|p| p.alpha() > 0).count();
         assert!(non_zero > 1000, "Open folder browser modal must render visible pixels onto pixmap");

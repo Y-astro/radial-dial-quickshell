@@ -288,6 +288,54 @@ pub async fn list_dir(target_path: &str) -> DirListing {
         })
 }
 
+/// Synchronous version of get_places for immediate modal initialization without async wait.
+pub fn get_places_sync() -> Vec<PlaceEntry> {
+    let mut places = Vec::new();
+    let home = std::env::var("HOME")
+        .unwrap_or_else(|_| shellexpand::tilde("~").to_string());
+
+    let candidates = [
+        ("Home", "home", home.clone()),
+        ("Documents", "description", format!("{}/Documents", home)),
+        ("Downloads", "download", format!("{}/Downloads", home)),
+        ("Pictures", "photo", format!("{}/Pictures", home)),
+        ("Music", "music_note", format!("{}/Music", home)),
+    ];
+
+    for (name, icon, path) in candidates {
+        if Path::new(&path).is_dir() {
+            places.push(PlaceEntry {
+                name: name.to_string(),
+                path,
+                icon: icon.to_string(),
+                is_device: false,
+                dev_node: None,
+            });
+        }
+    }
+
+    if let Ok(output) = std::process::Command::new("lsblk")
+        .args(["-J", "-o", "NAME,LABEL,MOUNTPOINTS,FSTYPE,SIZE"])
+        .output()
+    {
+        if output.status.success() {
+            let json_str = String::from_utf8_lossy(&output.stdout);
+            let mut devices = parse_lsblk_json(&json_str);
+            places.append(&mut devices);
+        }
+    }
+
+    places.push(PlaceEntry {
+        name: "Root (/)".to_string(),
+        path: "/".to_string(),
+        icon: "computer".to_string(),
+        is_device: false,
+        dev_node: None,
+    });
+
+    places
+}
+
 /// List system places (Home, Documents, Downloads, Pictures, Music) + block devices from `lsblk -J`.
 pub async fn get_places() -> Vec<PlaceEntry> {
     let mut places = Vec::new();

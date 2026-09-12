@@ -188,7 +188,14 @@ impl SctkSeatHandler for App {
     fn seat_state(&mut self) -> &mut SeatState {
         &mut self.seat_state
     }
-    fn new_seat(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _seat: WlSeat) {}
+    fn new_seat(&mut self, _conn: &Connection, qh: &QueueHandle<Self>, seat: WlSeat) {
+        if self.pointer.is_none() {
+            self.pointer = self.seat_state.get_pointer(qh, &seat).ok();
+        }
+        if self.keyboard.is_none() {
+            self.keyboard = self.seat_state.get_keyboard(qh, &seat, None).ok();
+        }
+    }
     fn new_capability(
         &mut self,
         _conn: &Connection,
@@ -381,13 +388,24 @@ impl App {
         let compositor_state = CompositorState::bind(&globals, qh)?;
         let layer_shell = LayerShell::bind(&globals, qh)?;
         let shm = Shm::bind(&globals, qh)?;
-        let seat_state = SeatState::new(&globals, qh);
+        let mut seat_state = SeatState::new(&globals, qh);
         let output_state = OutputState::new(&globals, qh);
 
         let config = RadialConfig::load();
         let is_low_end = detect_gpu_profile(&config) == GpuProfile::LowEnd;
         let menu = MenuState::new(config, is_low_end);
         let font_renderer = FontRenderer::new();
+
+        let mut pointer = None;
+        let mut keyboard = None;
+        for seat in seat_state.seats() {
+            if pointer.is_none() {
+                pointer = seat_state.get_pointer(qh, &seat).ok();
+            }
+            if keyboard.is_none() {
+                keyboard = seat_state.get_keyboard(qh, &seat, None).ok();
+            }
+        }
 
         Ok(Self {
             registry_state,
@@ -402,8 +420,8 @@ impl App {
             menu,
             customizer: None,
             folder_browser: None,
-            pointer: None,
-            keyboard: None,
+            pointer,
+            keyboard,
             primary_output: None,
             surface_configured: false,
             pending_open_ctx: None,
@@ -446,24 +464,34 @@ impl App {
         }
 
         // Neither modal is open:
-        if is_right_button(button) {
-            // Check if outer sub-ring slice is hovered (e.g. FileJump target)
-            if self.menu.active_sub_tier == Some(SubTierType::FileJump) && self.menu.outer_hovered_index >= 0 {
-                let sub_idx = self.menu.outer_hovered_index as usize;
-                if sub_idx < self.menu.sub_slices.len() {
-                    let sub = &self.menu.sub_slices[sub_idx];
+        // Check if outer sub-ring slice is clicked (e.g. FileJump target or + Add)
+        if self.menu.active_sub_tier == Some(SubTierType::FileJump) && self.menu.outer_hovered_index >= 0 {
+            let sub_idx = self.menu.outer_hovered_index as usize;
+            if sub_idx < self.menu.sub_slices.len() {
+                let sub = &self.menu.sub_slices[sub_idx];
+                if sub.is_add_button {
+                    // Left OR right click on + Add opens Add Folder Target modal!
                     let mut c = CustomizerState::new();
-                    if sub.is_add_button {
-                        c.open_file_add();
-                    } else if let Some(target_idx) = sub.target_index {
-                        c.open_file_edit(target_idx, &sub.label, sub.target_path.as_deref().unwrap_or(""), &sub.icon);
-                    }
+                    c.open_file_add();
                     self.customizer = Some(c);
                     self.seat_handler.customizer_open = true;
                     self.dirty = true;
                     return;
+                } else if is_right_button(button) {
+                    if let Some(target_idx) = sub.target_index {
+                        let mut c = CustomizerState::new();
+                        c.open_file_edit(target_idx, &sub.label, sub.target_path.as_deref().unwrap_or(""), &sub.icon);
+                        self.customizer = Some(c);
+                        self.seat_handler.customizer_open = true;
+                        self.dirty = true;
+                        return;
+                    }
                 }
-            } else if self.menu.hovered_index >= 0 && (self.menu.hovered_index as usize) < self.menu.current_slices.len() {
+            }
+        }
+
+        if is_right_button(button) {
+            if self.menu.hovered_index >= 0 && (self.menu.hovered_index as usize) < self.menu.current_slices.len() {
                 // Right click on main ring slice -> open SliceSwap
                 let slot_idx = self.menu.hovered_index as usize;
                 let mut c = CustomizerState::new();
@@ -552,7 +580,7 @@ impl App {
         let content_x = card_x + 18.0;
         let content_w = card_w - 36.0;
 
-        // 2. Top-right close button (32x32)
+        // 2. Top-right header buttons
         let close_size = 32.0;
         let close_x = content_x + content_w - close_size;
         let close_y = card_y + 19.0;
@@ -568,12 +596,26 @@ impl App {
             None => return,
         };
 
+        // Reset to Defaults button (in header, next to close button)
+        if mode.is_swap() {
+            let reset_x = close_x - 38.0;
+            if x >= reset_x && x <= reset_x + close_size && y >= close_y && y <= close_y + close_size {
+                self.menu.config.reset_context(&self.menu.context.to_string());
+                let _ = self.menu.config.save();
+                self.menu.refresh_current_slices();
+                self.customizer = None;
+                self.seat_handler.customizer_open = false;
+                self.dirty = true;
+                return;
+            }
+        }
+
         match mode {
             CustomizerMode::SliceSwap { slot_index } => {
-                // Category tabs (y: card_y + 64.0 .. card_y + 92.0)
-                let tabs_y = card_y + 64.0;
-                let tab_h = 28.0;
-                let tab_gap = 6.0;
+                // Category tabs (y: card_y + 66.0 .. card_y + 92.0)
+                let tabs_y = card_y + 66.0;
+                let tab_h = 26.0;
+                let tab_gap = 5.0;
                 let num_tabs = renderer::customizer::CATEGORIES.len() as f32;
                 let tab_w = (content_w - (num_tabs - 1.0) * tab_gap) / num_tabs;
 
@@ -591,26 +633,28 @@ impl App {
                     }
                 }
 
-                // Search clear icon (y: card_y + 100.0 .. card_y + 134.0)
-                let search_y = card_y + 100.0;
+                // Search bar & clear icon (y: card_y + 102.0 .. card_y + 136.0)
+                let search_y = card_y + 102.0;
                 let search_h = 34.0;
-                if y >= search_y && y <= search_y + search_h {
+                if y >= search_y && y <= search_y + search_h && x >= content_x && x <= content_x + content_w {
                     if let Some(c) = &mut self.customizer {
                         if !c.search_query.is_empty() && x >= content_x + content_w - 32.0 {
                             c.search_query.clear();
                             c.scroll_offset = 0.0;
-                            self.dirty = true;
-                            return;
+                        } else {
+                            c.search_focused = true;
                         }
                     }
+                    self.dirty = true;
+                    return;
                 }
 
-                // Action list items (y: card_y + 142.0 .. card_y + 510.0)
-                let list_y = card_y + 142.0;
-                let list_h = 368.0;
+                // Action list items (y: card_y + 146.0 .. card_y + 522.0)
+                let list_y = card_y + 146.0;
+                let list_h = 376.0;
                 if y >= list_y && y <= list_y + list_h && x >= content_x && x <= content_x + content_w {
                     let item_h = 50.0;
-                    let item_gap = 6.0;
+                    let item_gap = 4.0;
                     let step = item_h + item_gap;
                     let scroll_offset = self.customizer.as_ref().map(|c| c.scroll_offset).unwrap_or(0.0);
                     let rel_y = y - (list_y - scroll_offset);
@@ -672,20 +716,6 @@ impl App {
                             }
                         }
                     }
-                }
-
-                // Reset to Defaults button (footer_y: card_y + 518.0 .. card_y + 546.0)
-                let footer_y = card_y + 518.0;
-                let reset_btn_w = 145.0;
-                let reset_btn_h = 28.0;
-                if x >= content_x && x <= content_x + reset_btn_w && y >= footer_y && y <= footer_y + reset_btn_h {
-                    self.menu.config.reset_context(&self.menu.context.to_string());
-                    let _ = self.menu.config.save();
-                    self.menu.refresh_current_slices();
-                    self.customizer = None;
-                    self.seat_handler.customizer_open = false;
-                    self.dirty = true;
-                    return;
                 }
             }
 
@@ -763,9 +793,9 @@ impl App {
                     }
                 }
 
-                // Action buttons row (y: card_y + 505.0 .. card_y + 543.0)
-                let btns_y = card_y + 505.0;
-                let btns_h = 38.0;
+                // Action buttons row (y: card_y + 486.0 .. card_y + 522.0)
+                let btns_y = card_y + 486.0;
+                let btns_h = 36.0;
                 if y >= btns_y && y <= btns_y + btns_h {
                     // Delete button (visible only in Edit mode, width 90.0)
                     if is_edit {
@@ -800,10 +830,14 @@ impl App {
                     // Save
                     if x >= save_x && x <= save_x + save_w {
                         if let Some(c) = &self.customizer {
-                            let label = c.input_label.trim().to_string();
+                            let mut label = c.input_label.trim().to_string();
                             let path = c.input_path.trim().to_string();
                             let icon = c.input_icon.clone();
-                            if !label.is_empty() && !path.is_empty() {
+                            if label.is_empty() && !path.is_empty() {
+                                let p = std::path::Path::new(&path);
+                                label = p.file_name().and_then(|n| n.to_str()).unwrap_or("Folder").to_string();
+                            }
+                            if !path.is_empty() {
                                 if let Some(t_idx) = target_index_opt {
                                     self.menu.config.update_file_jump_target(t_idx, &label, &path, &icon);
                                 } else {
@@ -847,7 +881,7 @@ impl App {
             return;
         }
 
-        // Close button (top-right)
+        // Close button (top-right, 32x32)
         let close_size = 32.0;
         let close_x = card_x + card_w - margin - close_size;
         let close_y = card_y + 18.0;
@@ -857,7 +891,7 @@ impl App {
             return;
         }
 
-        // Up / Back button
+        // Up / Back button (top-left, 36x36)
         let back_btn_x = card_x + margin;
         let back_btn_y = card_y + 16.0;
         let back_btn_size = 36.0;
@@ -875,39 +909,63 @@ impl App {
             }
         }
 
-        // Bottom Action buttons (y: card_y + 482.0 .. card_y + 520.0)
-        let btns_y = card_y + 482.0;
-        let btns_h = 38.0;
-        if y >= btns_y && y <= btns_y + btns_h {
-            let select_w = 100.0;
-            let select_x = card_x + card_w - margin - select_w;
-            let cancel_w = 80.0;
-            let cancel_x = select_x - 8.0 - cancel_w;
-
-            // Cancel
-            if x >= cancel_x && x <= cancel_x + cancel_w {
-                self.folder_browser = None;
-                self.dirty = true;
-                return;
-            }
-
-            // Select
-            if x >= select_x && x <= select_x + select_w {
-                let path = self.folder_browser.as_ref().map(|fb| fb.current_path.clone());
-                if let Some(p) = path {
-                    if let Some(c) = &mut self.customizer {
-                        c.input_path = p;
-                    }
-                }
-                self.folder_browser = None;
+        // Path bar refresh icon (card_y + 60.0 .. card_y + 96.0)
+        let path_bar_y = card_y + 60.0;
+        let path_bar_h = 36.0;
+        let refresh_x = card_x + card_w - margin - 36.0;
+        if y >= path_bar_y && y <= path_bar_y + path_bar_h && x >= refresh_x && x <= card_x + card_w - margin {
+            if let Some(fb) = &mut self.folder_browser {
+                let cur = fb.current_path.clone();
+                let l = crate::ipc::folder::list_dir_sync(&cur);
+                fb.set_listing(l);
                 self.dirty = true;
                 return;
             }
         }
 
-        // Folder list items (y: card_y + 144.0 .. card_y + 472.0)
-        let list_y = card_y + 144.0;
-        let list_h = 328.0;
+        // Places Quick Navigation Chips (y: card_y + 104.0 .. card_y + 132.0)
+        let places_y = card_y + 104.0;
+        let chip_h = 28.0;
+        if y >= places_y && y <= places_y + chip_h {
+            if let Some(fb) = &mut self.folder_browser {
+                let mut chip_x = card_x + margin;
+                let places_clone = fb.places.clone();
+                for place in &places_clone {
+                    let chip_w = (place.name.len() as f32 * 7.5 + 32.0).clamp(65.0, 120.0);
+                    if chip_x + chip_w > card_x + card_w - margin {
+                        break;
+                    }
+                    if x >= chip_x && x <= chip_x + chip_w {
+                        let l = crate::ipc::folder::list_dir_sync(&place.path);
+                        fb.set_listing(l);
+                        self.dirty = true;
+                        return;
+                    }
+                    chip_x += chip_w + 6.0;
+                }
+            }
+        }
+
+        // Filter subfolders input box (y: card_y + 140.0 .. card_y + 174.0)
+        let filter_y = card_y + 140.0;
+        let filter_h = 34.0;
+        if y >= filter_y && y <= filter_y + filter_h && x >= card_x + margin && x <= card_x + card_w - margin {
+            if let Some(fb) = &mut self.folder_browser {
+                if !fb.search_query.is_empty() && x >= card_x + card_w - margin - 30.0 {
+                    fb.search_query.clear();
+                    fb.scroll_offset = 0.0;
+                } else {
+                    fb.search_focused = true;
+                }
+                self.dirty = true;
+                return;
+            }
+        }
+
+        // Folder list items (y: card_y + 180.0 .. card_y + card_h - 54.0)
+        let list_y = card_y + 180.0;
+        let bottom_bar_h = 54.0;
+        let list_h = card_h - (list_y - card_y) - bottom_bar_h;
         if y >= list_y && y <= list_y + list_h && x >= card_x + margin && x <= card_x + card_w - margin {
             let item_step = 48.0;
             let scroll_offset = self.folder_browser.as_ref().map(|fb| fb.scroll_offset).unwrap_or(0.0);
@@ -935,21 +993,90 @@ impl App {
                 }
             }
         }
+
+        // Bottom Action buttons (bar_y: card_y + card_h - 44.0 .. card_y + card_h - 8.0)
+        let bar_y = card_y + card_h - 44.0;
+        let btn_h = 36.0;
+        if y >= bar_y && y <= bar_y + btn_h {
+            let cancel_w = 90.0;
+            let cancel_x = card_x + margin;
+
+            // Cancel button (left)
+            if x >= cancel_x && x <= cancel_x + cancel_w {
+                self.folder_browser = None;
+                self.dirty = true;
+                return;
+            }
+
+            // Select button (right)
+            let current_name = self.folder_browser.as_ref().map(|fb| fb.current_folder_name()).unwrap_or_default();
+            let select_label = if !current_name.is_empty() {
+                format!("Select \"{}\"", current_name)
+            } else {
+                "Select Folder".to_string()
+            };
+            let select_w = (select_label.len() as f32 * 7.0 + 44.0).clamp(140.0, 220.0);
+            let select_x = card_x + card_w - margin - select_w;
+
+            if x >= select_x && x <= select_x + select_w {
+                let path = self.folder_browser.as_ref().map(|fb| fb.current_path.clone());
+                if let Some(p) = path {
+                    if let Some(c) = &mut self.customizer {
+                        c.input_path = p;
+                        if c.input_label.is_empty() && !current_name.is_empty() {
+                            c.input_label = current_name.to_string();
+                        }
+                    }
+                }
+                self.folder_browser = None;
+                self.dirty = true;
+                return;
+            }
+        }
     }
 
     fn handle_customizer_or_folder_key(&mut self, keysym: u32) -> bool {
-        if self.folder_browser.is_some() {
+        if let Some(fb) = &mut self.folder_browser {
             if is_escape(keysym) {
                 self.folder_browser = None;
                 self.dirty = true;
                 return true;
             }
+            if keysym == 0xff08 || keysym == 8 {
+                if !fb.search_query.is_empty() {
+                    fb.search_query.pop();
+                    fb.scroll_offset = 0.0;
+                } else if let Some(listing) = &fb.listing {
+                    let parent = listing.parent.clone();
+                    if !parent.is_empty() && parent != fb.current_path {
+                        let l = crate::ipc::folder::list_dir_sync(&parent);
+                        fb.set_listing(l);
+                    }
+                }
+                self.dirty = true;
+                return true;
+            }
+            if let Some(ch) = keysym_to_char(keysym) {
+                if !ch.is_control() {
+                    fb.search_query.push(ch);
+                    fb.search_focused = true;
+                    fb.scroll_offset = 0.0;
+                    self.dirty = true;
+                    return true;
+                }
+            }
             return true;
         }
 
         if let Some(customizer) = &mut self.customizer {
-            // 1. Escape: close customizer modal
+            // 1. Escape: close customizer modal or clear search query
             if is_escape(keysym) {
+                if customizer.mode.is_swap() && !customizer.search_query.is_empty() {
+                    customizer.search_query.clear();
+                    customizer.scroll_offset = 0.0;
+                    self.dirty = true;
+                    return true;
+                }
                 self.customizer = None;
                 self.seat_handler.customizer_open = false;
                 self.dirty = true;
@@ -982,10 +1109,14 @@ impl App {
             // 4. Enter / Return: Save in file target edit/add mode
             if keysym == 0xff0d || keysym == 13 {
                 if customizer.mode.is_file_edit() || customizer.mode.is_file_add() {
-                    let label = customizer.input_label.trim().to_string();
+                    let mut label = customizer.input_label.trim().to_string();
                     let path = customizer.input_path.trim().to_string();
                     let icon = customizer.input_icon.clone();
-                    if !label.is_empty() && !path.is_empty() {
+                    if label.is_empty() && !path.is_empty() {
+                        let p = std::path::Path::new(&path);
+                        label = p.file_name().and_then(|n| n.to_str()).unwrap_or("Folder").to_string();
+                    }
+                    if !path.is_empty() {
                         match customizer.mode {
                             CustomizerMode::FileTargetEdit { target_index } => {
                                 self.menu.config.update_file_jump_target(target_index, &label, &path, &icon);
@@ -1012,6 +1143,7 @@ impl App {
                 if !ch.is_control() {
                     if customizer.mode.is_swap() {
                         customizer.search_query.push(ch);
+                        customizer.search_focused = true;
                         customizer.scroll_offset = 0.0;
                     } else if customizer.focused_field == 0 {
                         customizer.input_label.push(ch);
@@ -1281,8 +1413,18 @@ impl App {
             self.menu.is_low_end_gpu,
         );
 
-        // 5. Draw Customizer modal if active
-        if let Some(customizer_state) = &self.customizer {
+        // 5. Draw Folder Browser modal or Customizer modal if active
+        if let Some(folder_state) = &self.folder_browser {
+            renderer::folder_browser::render_folder_browser_with_font(
+                folder_state,
+                pixmap,
+                w as f32,
+                h as f32,
+                self.menu.center_x,
+                self.menu.center_y,
+                &mut self.font_renderer,
+            );
+        } else if let Some(customizer_state) = &self.customizer {
             let cat = state::actions::function_catalogue();
             let surface_hex = self.menu.config.colors.as_ref().map(|c| c.surface_hex()).unwrap_or("#141313");
             let subtext_hex = self.menu.config.colors.as_ref().map(|c| c.subtext_hex()).unwrap_or("#948f94");
@@ -1305,19 +1447,6 @@ impl App {
                 self.menu.center_y,
                 &mut self.font_renderer,
                 customizer_colors,
-            );
-        }
-
-        // 6. Draw Folder Browser modal if active
-        if let Some(folder_state) = &self.folder_browser {
-            renderer::folder_browser::render_folder_browser_with_font(
-                folder_state,
-                pixmap,
-                w as f32,
-                h as f32,
-                self.menu.center_x,
-                self.menu.center_y,
-                &mut self.font_renderer,
             );
         }
 
@@ -1463,6 +1592,39 @@ impl App {
                 }
             }
             _ => {}
+        }
+
+        // Animate modal popups (180ms OutCubic scale & fade-in)
+        if let Some(c) = &mut self.customizer {
+            if c.anim_progress < 1.0 {
+                c.anim_elapsed = (c.anim_elapsed + dt).min(180.0);
+                let t = (c.anim_elapsed / 180.0).clamp(0.0, 1.0);
+                let next = Easing::OutCubic.value(t);
+                if (next - c.anim_progress).abs() > 0.002 {
+                    c.anim_progress = next;
+                    self.dirty = true;
+                }
+                if c.anim_elapsed >= 180.0 {
+                    c.anim_progress = 1.0;
+                    self.dirty = true;
+                }
+            }
+        }
+
+        if let Some(fb) = &mut self.folder_browser {
+            if fb.anim_progress < 1.0 {
+                fb.anim_elapsed = (fb.anim_elapsed + dt).min(180.0);
+                let t = (fb.anim_elapsed / 180.0).clamp(0.0, 1.0);
+                let next = Easing::OutCubic.value(t);
+                if (next - fb.anim_progress).abs() > 0.002 {
+                    fb.anim_progress = next;
+                    self.dirty = true;
+                }
+                if fb.anim_elapsed >= 180.0 {
+                    fb.anim_progress = 1.0;
+                    self.dirty = true;
+                }
+            }
         }
     }
 }

@@ -8,11 +8,11 @@ use crate::state::config::FileJumpTarget;
 use tiny_skia::{Color, FillRule, Paint, PathBuilder, Pixmap, Stroke, Transform};
 
 pub const CARD_W: f32 = 480.0;
-pub const CARD_H: f32 = 560.0;
+pub const CARD_H: f32 = 540.0;
 pub const CARD_RADIUS: f32 = 22.0;
 
 pub const CATEGORIES: &[&str] = &[
-    "All", "Apps", "Tools", "Media", "Window", "System",
+    "All", "Apps", "Tools", "Media", "Capture", "Window", "System",
 ];
 
 pub const AVAILABLE_ICONS: &[&str] = &[
@@ -114,8 +114,9 @@ impl CustomizerMode {
 pub struct CustomizerState {
     pub is_open: bool,
     pub mode: CustomizerMode,
-    pub active_category: String, // "All", "Apps", "Tools", "Media", "Window", "System"
+    pub active_category: String, // "All", "Apps", "Tools", "Media", "Capture", "Window", "System"
     pub search_query: String,
+    pub search_focused: bool,
     pub scroll_offset: f32,
     pub selected_item: Option<String>,
     // Input field buffers for file target editing:
@@ -123,6 +124,9 @@ pub struct CustomizerState {
     pub input_path: String,
     pub input_icon: String,
     pub focused_field: usize, // 0=label, 1=path, 2=icon
+    // Opening animation state (180ms OutCubic)
+    pub anim_elapsed: f32,
+    pub anim_progress: f32,
 }
 
 impl Default for CustomizerState {
@@ -132,12 +136,15 @@ impl Default for CustomizerState {
             mode: CustomizerMode::SliceSwap { slot_index: 0 },
             active_category: "All".to_string(),
             search_query: String::new(),
+            search_focused: false,
             scroll_offset: 0.0,
             selected_item: None,
             input_label: String::new(),
             input_path: String::new(),
             input_icon: "folder".to_string(),
             focused_field: 0,
+            anim_elapsed: 0.0,
+            anim_progress: 0.0,
         }
     }
 }
@@ -151,8 +158,11 @@ impl CustomizerState {
         self.mode = CustomizerMode::SliceSwap { slot_index };
         self.is_open = true;
         self.search_query.clear();
+        self.search_focused = false;
         self.scroll_offset = 0.0;
         self.selected_item = None;
+        self.anim_elapsed = 0.0;
+        self.anim_progress = 0.0;
     }
 
     pub fn open_file_edit(&mut self, target_index: usize, label: &str, path: &str, icon: &str) {
@@ -165,6 +175,9 @@ impl CustomizerState {
             icon.to_string()
         };
         self.focused_field = 0;
+        self.search_focused = false;
+        self.anim_elapsed = 0.0;
+        self.anim_progress = 0.0;
         self.is_open = true;
     }
 
@@ -178,6 +191,9 @@ impl CustomizerState {
         self.input_path.clear();
         self.input_icon = "folder".to_string();
         self.focused_field = 0;
+        self.search_focused = false;
+        self.anim_elapsed = 0.0;
+        self.anim_progress = 0.0;
         self.is_open = true;
     }
 
@@ -329,38 +345,22 @@ pub fn render_customizer_with_font(
         return;
     }
 
-    // 1. Frosted glass backdrop: 3 layers for depth
-    // Layer 1: Deep dark scrim
-    let mut backdrop_paint = Paint::default();
-    backdrop_paint.set_color(Color::from_rgba8(0, 0, 6, 128)); // ~50% dark
-    if let Some(rect) = tiny_skia::Rect::from_xywh(0.0, 0.0, screen_w, screen_h) {
-        pixmap.fill_rect(rect, &backdrop_paint, Transform::identity(), None);
-    }
+    // Animation progress (0.01 to 1.0)
+    let anim_t = state.anim_progress.clamp(0.01, 1.0);
+    let scale = 0.92 + 0.08 * anim_t;
 
-    // 2. Card Dimensions & Placement (480x560 px, anchor-relative)
-    // Position card near anchor (dial center), offset toward screen center, clamped to screen
-    let card_w = CARD_W.min(screen_w - 20.0);
-    let card_h = CARD_H.min(screen_h - 20.0);
-    // Prefer positioning card offset from anchor toward screen center
-    let _margin_x = card_w / 2.0 + 20.0;
-    let _margin_y = card_h / 2.0 + 20.0;
-    // Start from anchor, shift toward center slightly
-    let preferred_x = anchor_x - card_w / 2.0 + (screen_w / 2.0 - anchor_x).signum() * 60.0;
-    let preferred_y = anchor_y - card_h / 2.0 + (screen_h / 2.0 - anchor_y).signum() * 60.0;
-    let card_x = preferred_x.clamp(10.0, screen_w - card_w - 10.0);
-    let card_y = preferred_y.clamp(10.0, screen_h - card_h - 10.0);
+    // 2. Card Dimensions & Placement (480x540 px, anchor-relative)
+    let base_card_w = CARD_W.min(screen_w - 20.0);
+    let base_card_h = CARD_H.min(screen_h - 20.0);
+    let preferred_x = anchor_x - base_card_w / 2.0 + (screen_w / 2.0 - anchor_x).signum() * 60.0;
+    let preferred_y = anchor_y - base_card_h / 2.0 + (screen_h / 2.0 - anchor_y).signum() * 60.0;
+    let base_card_x = preferred_x.clamp(10.0, screen_w - base_card_w - 10.0);
+    let base_card_y = preferred_y.clamp(10.0, screen_h - base_card_h - 10.0);
 
-    // Layer 2: Blue-tinted frosted overlay around card area
-    let frost_x = (card_x - 40.0).max(0.0);
-    let frost_y = (card_y - 40.0).max(0.0);
-    let frost_w = (card_w + 80.0).min(screen_w - frost_x);
-    let frost_h = (card_h + 80.0).min(screen_h - frost_y);
-    if let Some(frost_path) = rounded_rect_path(frost_x, frost_y, frost_w, frost_h, CARD_RADIUS + 20.0) {
-        let mut frost_paint = Paint::default();
-        frost_paint.set_color(Color::from_rgba8(10, 10, 20, 40));
-        frost_paint.anti_alias = true;
-        pixmap.fill_path(&frost_path, &frost_paint, FillRule::Winding, Transform::identity(), None);
-    }
+    let card_w = base_card_w * scale;
+    let card_h = base_card_h * scale;
+    let card_x = base_card_x + (base_card_w - card_w) / 2.0;
+    let card_y = base_card_y + (base_card_h - card_h) / 2.0;
 
     // Subtle drop shadow outline
     stroke_rounded_rect(
@@ -370,14 +370,14 @@ pub fn render_customizer_with_font(
         card_w + 2.0,
         card_h + 2.0,
         CARD_RADIUS + 1.0,
-        Color::from_rgba8(0, 0, 0, 70),
+        Color::from_rgba8(0, 0, 0, 80),
         3.0,
     );
 
     // Card background fill
     fill_rounded_rect(pixmap, card_x, card_y, card_w, card_h, CARD_RADIUS, colors.card_bg);
 
-    // Card border - brighter for frosted glass effect
+    // Card border
     stroke_rounded_rect(
         pixmap,
         card_x,
@@ -385,7 +385,7 @@ pub fn render_customizer_with_font(
         card_w,
         card_h,
         CARD_RADIUS,
-        Color::from_rgba8(255, 255, 255, 60), // brighter than before
+        Color::from_rgba8(255, 255, 255, 36),
         1.5,
     );
 
@@ -395,22 +395,12 @@ pub fn render_customizer_with_font(
     highlight_pb.line_to(card_x + card_w - CARD_RADIUS, card_y + 1.5);
     if let Some(p) = highlight_pb.finish() {
         let mut paint = Paint::default();
-        paint.set_color(Color::from_rgba8(255, 255, 255, 80)); // brighter
+        paint.set_color(Color::from_rgba8(255, 255, 255, 45));
         let stroke = Stroke {
-            width: 1.5,
+            width: 1.0,
             ..Default::default()
         };
         pixmap.stroke_path(&p, &paint, &stroke, Transform::identity(), None);
-    }
-    // Second subtle glow below first line
-    let mut glow_pb = PathBuilder::new();
-    glow_pb.move_to(card_x + CARD_RADIUS, card_y + 3.0);
-    glow_pb.line_to(card_x + card_w - CARD_RADIUS, card_y + 3.0);
-    if let Some(p2) = glow_pb.finish() {
-        let mut paint2 = Paint::default();
-        paint2.set_color(Color::from_rgba8(255, 255, 255, 30));
-        let stroke2 = Stroke { width: 1.0, ..Default::default() };
-        pixmap.stroke_path(&p2, &paint2, &stroke2, Transform::identity(), None);
     }
 
     // 3. Title Bar / Header (mode description & close button)
@@ -529,6 +519,48 @@ pub fn render_customizer_with_font(
         colors.on_surface,
     );
 
+    // Reset to Defaults button (in SliceSwap mode, next to close button)
+    if state.mode.is_swap() {
+        let reset_x = close_x - 38.0;
+        fill_rounded_rect(
+            pixmap,
+            reset_x,
+            close_y,
+            close_size,
+            close_size,
+            16.0,
+            Color::from_rgba8(255, 255, 255, 15),
+        );
+        stroke_rounded_rect(
+            pixmap,
+            reset_x,
+            close_y,
+            close_size,
+            close_size,
+            16.0,
+            Color::from_rgba8(255, 255, 255, 30),
+            1.0,
+        );
+        draw_icon(
+            font_renderer,
+            pixmap,
+            "refresh",
+            reset_x + close_size / 2.0,
+            close_y + close_size / 2.0,
+            18.0,
+            colors.subtext,
+        );
+    }
+    draw_icon(
+        font_renderer,
+        pixmap,
+        "close",
+        close_x + close_size / 2.0,
+        close_y + close_size / 2.0,
+        18.0,
+        colors.on_surface,
+    );
+
     // 4. Body Content per Mode
     match &state.mode {
         CustomizerMode::SliceSwap { .. } => {
@@ -588,11 +620,11 @@ fn render_slice_swap_body(
     font_renderer: &mut FontRenderer,
     colors: CustomizerColors,
 ) {
-    // 1. Category Tabs (All, Apps, Tools, Media, Window, System)
-    let tabs_y = card_y + 64.0;
-    let tab_h = 28.0;
+    // 1. Category Tabs (All, Apps, Tools, Media, Capture, Window, System)
+    let tabs_y = card_y + 66.0;
+    let tab_h = 26.0;
     let num_tabs = CATEGORIES.len() as f32;
-    let tab_gap = 6.0;
+    let tab_gap = 5.0;
     let tab_w = (content_w - (num_tabs - 1.0) * tab_gap) / num_tabs;
 
     for (i, cat) in CATEGORIES.iter().enumerate() {
@@ -600,7 +632,7 @@ fn render_slice_swap_body(
         let is_active = state.active_category.eq_ignore_ascii_case(cat);
 
         if is_active {
-            fill_rounded_rect(pixmap, tx, tabs_y, tab_w, tab_h, 14.0, colors.primary);
+            fill_rounded_rect(pixmap, tx, tabs_y, tab_w, tab_h, 13.0, colors.primary);
             draw_text(
                 font_renderer,
                 pixmap,
@@ -617,7 +649,7 @@ fn render_slice_swap_body(
                 tabs_y,
                 tab_w,
                 tab_h,
-                14.0,
+                13.0,
                 Color::from_rgba8(255, 255, 255, 13),
             );
             stroke_rounded_rect(
@@ -626,7 +658,7 @@ fn render_slice_swap_body(
                 tabs_y,
                 tab_w,
                 tab_h,
-                14.0,
+                13.0,
                 Color::from_rgba8(255, 255, 255, 30),
                 1.0,
             );
@@ -643,7 +675,7 @@ fn render_slice_swap_body(
     }
 
     // 2. Search Bar
-    let search_y = card_y + 100.0;
+    let search_y = card_y + 102.0;
     let search_h = 34.0;
     fill_rounded_rect(
         pixmap,
@@ -654,6 +686,11 @@ fn render_slice_swap_body(
         10.0,
         col_input_bg(),
     );
+    let search_border_col = if state.search_focused {
+        colors.primary
+    } else {
+        col_input_border()
+    };
     stroke_rounded_rect(
         pixmap,
         content_x,
@@ -661,8 +698,8 @@ fn render_slice_swap_body(
         content_w,
         search_h,
         10.0,
-        col_input_border(),
-        1.0,
+        search_border_col,
+        if state.search_focused { 1.5 } else { 1.0 },
     );
 
     // Search Icon
@@ -673,25 +710,31 @@ fn render_slice_swap_body(
         content_x + 18.0,
         search_y + search_h / 2.0,
         16.0,
-        Color::from_rgba8(255, 255, 255, 102),
+        if state.search_focused { colors.primary } else { Color::from_rgba8(255, 255, 255, 102) },
     );
 
     let query_x = content_x + 36.0;
     if state.search_query.is_empty() {
+        let placeholder = if state.search_focused { "|" } else { "Search function catalogue..." };
         draw_text_left(
             font_renderer,
             pixmap,
-            "Search function catalogue...",
+            placeholder,
             query_x,
             search_y + search_h / 2.0,
             12.0,
-            Color::from_rgba8(255, 255, 255, 89),
+            if state.search_focused { colors.primary } else { Color::from_rgba8(255, 255, 255, 89) },
         );
     } else {
+        let display_text = if state.search_focused {
+            format!("{}|", state.search_query)
+        } else {
+            state.search_query.clone()
+        };
         draw_text_left(
             font_renderer,
             pixmap,
-            &state.search_query,
+            &display_text,
             query_x,
             search_y + search_h / 2.0,
             12.0,
@@ -711,9 +754,8 @@ fn render_slice_swap_body(
     }
 
     // 3. Scrollable Catalogue Action List
-    // Build ordered list: active items first, then filtered catalogue (excluding already-active unless in filtered view)
-    let list_y = card_y + 142.0;
-    let list_h = 368.0;
+    let list_y = card_y + 146.0;
+    let list_h = 376.0;
     let filtered = state.filtered_catalogue(catalogue);
 
     // Build item list: each entry is (action_def, is_active)
@@ -722,7 +764,6 @@ fn render_slice_swap_body(
     // Active items first (in order they appear in active_slice_ids)
     for active_id in active_slice_ids {
         if let Some(def) = catalogue.iter().find(|d| d.id == active_id.as_str()) {
-            // Only show if it passes current filter
             let passes_filter = filtered.iter().any(|f| f.id == def.id);
             if passes_filter {
                 ordered_items.push((def, true));
@@ -750,15 +791,15 @@ fn render_slice_swap_body(
         );
     } else {
         let item_h = 50.0;
-        let item_gap = 6.0;
+        let item_gap = 4.0;
         let step = item_h + item_gap;
         let start_y = list_y - state.scroll_offset;
 
         for (idx, (item, is_active)) in ordered_items.iter().enumerate() {
             let cur_y = start_y + idx as f32 * step;
 
-            // Viewport bounds check
-            if cur_y + item_h < list_y || cur_y > list_y + list_h {
+            // Viewport bounds check: skip items completely outside list bounds
+            if cur_y + item_h < list_y || cur_y > list_y + list_h - 10.0 {
                 continue;
             }
 
@@ -941,76 +982,6 @@ fn render_slice_swap_body(
             }
         }
     }
-
-    // 4. Footer: Reset to Defaults & count
-    let footer_y = card_y + 518.0;
-    let divider_y = footer_y - 4.0;
-
-    let mut div_pb = PathBuilder::new();
-    div_pb.move_to(content_x, divider_y);
-    div_pb.line_to(content_x + content_w, divider_y);
-    if let Some(path) = div_pb.finish() {
-        let mut paint = Paint::default();
-        paint.set_color(Color::from_rgba8(255, 255, 255, 25));
-        let stroke = Stroke {
-            width: 1.0,
-            ..Default::default()
-        };
-        pixmap.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
-    }
-
-    // Reset to Defaults button
-    let reset_btn_w = 145.0;
-    let reset_btn_h = 28.0;
-    fill_rounded_rect(
-        pixmap,
-        content_x,
-        footer_y,
-        reset_btn_w,
-        reset_btn_h,
-        8.0,
-        Color::from_rgba8(255, 255, 255, 15),
-    );
-    stroke_rounded_rect(
-        pixmap,
-        content_x,
-        footer_y,
-        reset_btn_w,
-        reset_btn_h,
-        8.0,
-        Color::from_rgba8(255, 255, 255, 30),
-        1.0,
-    );
-    draw_icon(
-        font_renderer,
-        pixmap,
-        "refresh",
-        content_x + 16.0,
-        footer_y + reset_btn_h / 2.0,
-        14.0,
-        colors.subtext,
-    );
-    draw_text_left(
-        font_renderer,
-        pixmap,
-        "Reset to Defaults",
-        content_x + 28.0,
-        footer_y + reset_btn_h / 2.0,
-        11.0,
-        colors.on_surface,
-    );
-
-    // Right side count indicator
-    let count_str = format!("{} functions", ordered_items.len());
-    draw_text_left(
-        font_renderer,
-        pixmap,
-        &count_str,
-        content_x + content_w - 75.0,
-        footer_y + reset_btn_h / 2.0,
-        11.0,
-        colors.subtext,
-    );
 }
 
 /// Render FileTargetEdit and FileTargetAdd mode body:
@@ -1273,8 +1244,8 @@ fn render_file_target_body(
     }
 
     // 4. Action Buttons Row (Delete / Cancel / Save)
-    let btns_y = card_y + 505.0;
-    let btns_h = 38.0;
+    let btns_h = 36.0;
+    let btns_y = card_y + 486.0;
 
     // Delete button (visible only in Edit mode)
     if target_index.is_some() {

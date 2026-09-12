@@ -20,6 +20,9 @@ pub struct FolderBrowserState {
     pub scroll_offset: f32,
     pub selected_index: i32,
     pub search_query: String,
+    pub search_focused: bool,
+    pub anim_elapsed: f32,
+    pub anim_progress: f32,
 }
 
 impl FolderBrowserState {
@@ -29,10 +32,13 @@ impl FolderBrowserState {
             is_open: false,
             current_path: String::new(),
             listing: None,
-            places: Vec::new(),
+            places: crate::ipc::folder::get_places_sync(),
             scroll_offset: 0.0,
             selected_index: -1,
             search_query: String::new(),
+            search_focused: false,
+            anim_elapsed: 0.0,
+            anim_progress: 0.0,
         }
     }
 
@@ -41,8 +47,14 @@ impl FolderBrowserState {
         self.is_open = true;
         self.current_path = initial_path.to_string();
         self.search_query.clear();
+        self.search_focused = false;
         self.scroll_offset = 0.0;
         self.selected_index = -1;
+        self.anim_elapsed = 0.0;
+        self.anim_progress = 0.0;
+        if self.places.is_empty() {
+            self.places = crate::ipc::folder::get_places_sync();
+        }
     }
 
     /// Closes the modal.
@@ -224,20 +236,22 @@ pub fn render_folder_browser_with_font(
     let col_on_surface = Color::from_rgba8(205, 214, 244, 255); // Catppuccin Text
     let col_subtext = Color::from_rgba8(166, 173, 200, 200);   // Catppuccin Subtext
 
-    // 1. Frosted glass backdrop
-    let mut scrim_paint = Paint::default();
-    scrim_paint.set_color(Color::from_rgba8(0, 0, 6, 128));
-    if let Some(scrim_rect) = tiny_skia::Rect::from_xywh(0.0, 0.0, screen_w, screen_h) {
-        pixmap.fill_rect(scrim_rect, &scrim_paint, Transform::identity(), None);
-    }
+    // Animation progress (0.01 to 1.0)
+    let anim_t = state.anim_progress.clamp(0.01, 1.0);
+    let scale = 0.92 + 0.08 * anim_t;
 
     // 2. Main Modal Card (anchor-relative positioning)
-    let card_w = 480.0_f32.min(screen_w - 20.0);
-    let card_h = 540.0_f32.min(screen_h - 20.0);
-    let preferred_x = anchor_x - card_w / 2.0 + (screen_w / 2.0 - anchor_x).signum() * 60.0;
-    let preferred_y = anchor_y - card_h / 2.0 + (screen_h / 2.0 - anchor_y).signum() * 60.0;
-    let card_x = preferred_x.clamp(10.0, screen_w - card_w - 10.0);
-    let card_y = preferred_y.clamp(10.0, screen_h - card_h - 10.0);
+    let base_card_w = 480.0_f32.min(screen_w - 20.0);
+    let base_card_h = 540.0_f32.min(screen_h - 20.0);
+    let preferred_x = anchor_x - base_card_w / 2.0 + (screen_w / 2.0 - anchor_x).signum() * 60.0;
+    let preferred_y = anchor_y - base_card_h / 2.0 + (screen_h / 2.0 - anchor_y).signum() * 60.0;
+    let base_card_x = preferred_x.clamp(10.0, screen_w - base_card_w - 10.0);
+    let base_card_y = preferred_y.clamp(10.0, screen_h - base_card_h - 10.0);
+
+    let card_w = base_card_w * scale;
+    let card_h = base_card_h * scale;
+    let card_x = base_card_x + (base_card_w - card_w) / 2.0;
+    let card_y = base_card_y + (base_card_h - card_h) / 2.0;
     let card_radius = 22.0;
 
     // Card background fill & border
@@ -723,7 +737,7 @@ mod tests {
         assert!(!state.is_open);
         assert!(state.current_path.is_empty());
         assert!(state.listing.is_none());
-        assert!(state.places.is_empty());
+        assert!(!state.places.is_empty());
         assert_eq!(state.scroll_offset, 0.0);
         assert_eq!(state.selected_index, -1);
         assert!(state.search_query.is_empty());

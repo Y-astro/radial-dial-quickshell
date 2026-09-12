@@ -17,14 +17,27 @@ CACHE_FILE = "/tmp/radial_tabs_cache.json"
 def get_hypr_socket():
     runtime_dir = os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
     sig = os.environ.get("HYPRLAND_INSTANCE_SIGNATURE", "")
-    if not sig:
-        # Scan runtime_dir/hypr for signature folder
-        hypr_dir = os.path.join(runtime_dir, "hypr")
-        if os.path.isdir(hypr_dir):
-            subdirs = [d for d in os.listdir(hypr_dir) if os.path.isdir(os.path.join(hypr_dir, d))]
-            if subdirs:
-                sig = subdirs[0]
-    return os.path.join(runtime_dir, "hypr", sig, ".socket.sock")
+    if sig:
+        sock = os.path.join(runtime_dir, "hypr", sig, ".socket.sock")
+        if os.path.exists(sock):
+            return sock
+
+    # Fallback: Scan runtime_dir/hypr for newest valid socket
+    hypr_dir = os.path.join(runtime_dir, "hypr")
+    if os.path.isdir(hypr_dir):
+        valid_socks = []
+        for d in os.listdir(hypr_dir):
+            candidate = os.path.join(hypr_dir, d, ".socket.sock")
+            if os.path.exists(candidate):
+                try:
+                    valid_socks.append((os.path.getmtime(candidate), candidate))
+                except OSError:
+                    pass
+        if valid_socks:
+            valid_socks.sort(key=lambda x: x[0], reverse=True)
+            return valid_socks[0][1]
+
+    return os.path.join(runtime_dir, "hypr", sig or "default", ".socket.sock")
 
 def query_hypr_socket(cmd: str):
     sock_path = get_hypr_socket()

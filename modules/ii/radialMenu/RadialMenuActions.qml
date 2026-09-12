@@ -718,7 +718,13 @@ except Exception:
             icon: "power_settings_new",
             category: "System",
             desc: "Open power and session dialog",
-            action: () => exec("pkill wlogout || wlogout -p layer-shell &")
+            action: () => {
+                if (typeof GlobalStates !== "undefined" && GlobalStates) {
+                    GlobalStates.sessionOpen = true
+                } else {
+                    exec("qs -c end4-pC ipc call session open || qs ipc call session open || hyprctl dispatch global 'quickshell:sessionOpen' &")
+                }
+            }
         },
         "lock": {
             id: "lock",

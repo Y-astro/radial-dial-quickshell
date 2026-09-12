@@ -21,7 +21,9 @@ use sctk::{
     registry::{ProvidesRegistryState, RegistryState},
     seat::{
         keyboard::{KeyEvent, KeyboardHandler, Keysym, Modifiers},
-        pointer::{PointerEvent, PointerEventKind, PointerHandler},
+        pointer::{
+            CursorIcon, PointerEvent, PointerEventKind, PointerHandler, ThemeSpec, ThemedPointer,
+        },
         Capability, SeatHandler as SctkSeatHandler, SeatState,
     },
     shell::wlr_layer::{
@@ -96,6 +98,8 @@ pub struct App {
 
     // Wayland inputs
     pub pointer: Option<WlPointer>,
+    pub themed_pointer: Option<ThemedPointer>,
+    pub current_cursor_icon: Option<CursorIcon>,
     pub keyboard: Option<WlKeyboard>,
 
     // Primary output
@@ -189,8 +193,16 @@ impl SctkSeatHandler for App {
         &mut self.seat_state
     }
     fn new_seat(&mut self, _conn: &Connection, qh: &QueueHandle<Self>, seat: WlSeat) {
-        if self.pointer.is_none() {
-            self.pointer = self.seat_state.get_pointer(qh, &seat).ok();
+        if self.themed_pointer.is_none() {
+            let surface = self.compositor_state.create_surface(qh);
+            self.themed_pointer = self.seat_state.get_pointer_with_theme(
+                qh,
+                &seat,
+                self.shm.wl_shm(),
+                surface,
+                ThemeSpec::default(),
+            ).ok();
+            self.pointer = self.themed_pointer.as_ref().map(|tp| tp.pointer().clone());
         }
         if self.keyboard.is_none() {
             self.keyboard = self.seat_state.get_keyboard(qh, &seat, None).ok();
@@ -203,9 +215,17 @@ impl SctkSeatHandler for App {
         seat: WlSeat,
         capability: Capability,
     ) {
-        if capability == Capability::Pointer && self.pointer.is_none() {
-            let pointer = self.seat_state.get_pointer(qh, &seat).ok();
-            self.pointer = pointer;
+        if capability == Capability::Pointer && self.themed_pointer.is_none() {
+            let surface = self.compositor_state.create_surface(qh);
+            let themed_pointer = self.seat_state.get_pointer_with_theme(
+                qh,
+                &seat,
+                self.shm.wl_shm(),
+                surface,
+                ThemeSpec::default(),
+            ).ok();
+            self.pointer = themed_pointer.as_ref().map(|tp| tp.pointer().clone());
+            self.themed_pointer = themed_pointer;
         }
         if capability == Capability::Keyboard && self.keyboard.is_none() {
             let keyboard = self
@@ -223,7 +243,9 @@ impl SctkSeatHandler for App {
         capability: Capability,
     ) {
         if capability == Capability::Pointer {
+            self.themed_pointer = None;
             self.pointer = None;
+            self.current_cursor_icon = None;
         }
         if capability == Capability::Keyboard {
             self.keyboard = None;
@@ -264,7 +286,7 @@ impl LayerShellHandler for App {
 impl PointerHandler for App {
     fn pointer_frame(
         &mut self,
-        _conn: &Connection,
+        conn: &Connection,
         _qh: &QueueHandle<Self>,
         _pointer: &WlPointer,
         events: &[PointerEvent],
@@ -275,8 +297,29 @@ impl PointerHandler for App {
         for event in events {
             self.dirty = true;
             match event.kind {
+                PointerEventKind::Enter { .. } => {
+                    if let Some(tp) = &self.themed_pointer {
+                        let _ = tp.set_cursor(conn, CursorIcon::Default);
+                        self.current_cursor_icon = Some(CursorIcon::Default);
+                    }
+                }
+                PointerEventKind::Leave { .. } => {
+                    self.current_cursor_icon = None;
+                }
                 PointerEventKind::Motion { .. } => {
                     let (x, y) = event.position;
+                    let desired_icon = if self.is_text_input_hovered(x as f32, y as f32) {
+                        CursorIcon::Text
+                    } else {
+                        CursorIcon::Default
+                    };
+                    if self.current_cursor_icon != Some(desired_icon) {
+                        if let Some(tp) = &self.themed_pointer {
+                            if tp.set_cursor(conn, desired_icon).is_ok() {
+                                self.current_cursor_icon = Some(desired_icon);
+                            }
+                        }
+                    }
                     if self.customizer.is_some() || self.folder_browser.is_some() {
                         self.seat_handler.last_x = x as f32;
                         self.seat_handler.last_y = y as f32;
@@ -294,7 +337,6 @@ impl PointerHandler for App {
                 PointerEventKind::Axis { vertical, .. } => {
                     self.handle_pointer_axis(vertical.absolute);
                 }
-                _ => {}
             }
         }
     }
@@ -396,11 +438,20 @@ impl App {
         let menu = MenuState::new(config, is_low_end);
         let font_renderer = FontRenderer::new();
 
+        let mut themed_pointer = None;
         let mut pointer = None;
         let mut keyboard = None;
         for seat in seat_state.seats() {
-            if pointer.is_none() {
-                pointer = seat_state.get_pointer(qh, &seat).ok();
+            if themed_pointer.is_none() {
+                let surface = compositor_state.create_surface(qh);
+                themed_pointer = seat_state.get_pointer_with_theme(
+                    qh,
+                    &seat,
+                    shm.wl_shm(),
+                    surface,
+                    ThemeSpec::default(),
+                ).ok();
+                pointer = themed_pointer.as_ref().map(|tp| tp.pointer().clone());
             }
             if keyboard.is_none() {
                 keyboard = seat_state.get_keyboard(qh, &seat, None).ok();
@@ -421,6 +472,8 @@ impl App {
             customizer: None,
             folder_browser: None,
             pointer,
+            themed_pointer,
+            current_cursor_icon: None,
             keyboard,
             primary_output: None,
             surface_configured: false,
@@ -1166,12 +1219,82 @@ impl App {
         false
     }
 
+    /// Returns true if pointer coordinate (x, y) is currently hovering a text input box
+    fn is_text_input_hovered(&self, x: f32, y: f32) -> bool {
+        if self.folder_browser.is_some() {
+            let (w, h) = if let Some(surf) = &self.surface {
+                (surf.width.max(544) as f32, surf.height.max(544) as f32)
+            } else {
+                (1920.0, 1080.0)
+            };
+            let card_w = 480.0_f32.min(w - 20.0);
+            let card_h = 540.0_f32.min(h - 20.0);
+            let anchor_x = self.menu.center_x;
+            let anchor_y = self.menu.center_y;
+            let preferred_x = anchor_x - card_w / 2.0 + (w / 2.0 - anchor_x).signum() * 60.0;
+            let preferred_y = anchor_y - card_h / 2.0 + (h / 2.0 - anchor_y).signum() * 60.0;
+            let card_x = preferred_x.clamp(10.0, w - card_w - 10.0);
+            let card_y = preferred_y.clamp(10.0, h - card_h - 10.0);
+            let margin = 18.0;
+
+            let filter_y = card_y + 140.0;
+            let filter_h = 34.0;
+            if y >= filter_y && y <= filter_y + filter_h && x >= card_x + margin && x <= card_x + card_w - margin {
+                return true;
+            }
+            return false;
+        }
+
+        if let Some(c) = &self.customizer {
+            let (w, h) = if let Some(surf) = &self.surface {
+                (surf.width.max(544) as f32, surf.height.max(544) as f32)
+            } else {
+                (1920.0, 1080.0)
+            };
+            let card_w = renderer::customizer::CARD_W.min(w - 20.0);
+            let card_h = renderer::customizer::CARD_H.min(h - 20.0);
+            let anchor_x = self.menu.center_x;
+            let anchor_y = self.menu.center_y;
+            let preferred_x = anchor_x - card_w / 2.0 + (w / 2.0 - anchor_x).signum() * 60.0;
+            let preferred_y = anchor_y - card_h / 2.0 + (h / 2.0 - anchor_y).signum() * 60.0;
+            let card_x = preferred_x.clamp(10.0, w - card_w - 10.0);
+            let card_y = preferred_y.clamp(10.0, h - card_h - 10.0);
+            let content_x = card_x + 18.0;
+            let content_w = card_w - 36.0;
+
+            if c.mode.is_swap() {
+                let search_y = card_y + 90.0;
+                let search_h = 38.0;
+                if y >= search_y && y <= search_y + search_h && x >= content_x && x <= content_x + content_w {
+                    return true;
+                }
+            } else {
+                let label_box_y = card_y + 84.0;
+                let label_box_h = 38.0;
+                if y >= label_box_y && y <= label_box_y + label_box_h && x >= content_x && x <= content_x + content_w {
+                    return true;
+                }
+                let path_box_y = card_y + 154.0;
+                let path_box_h = 38.0;
+                let browse_w = 90.0;
+                let path_box_w = content_w - browse_w - 8.0;
+                if y >= path_box_y && y <= path_box_y + path_box_h && x >= content_x && x <= content_x + path_box_w {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        false
+    }
+
     /// Open or map radial surface and transition to Opening phase
     pub fn open_menu(&mut self, ctx: HyprContext, qh: &QueueHandle<Self>) -> Result<()> {
         self.menu.config.reload_system_colors();
         self.customizer = None;
         self.folder_browser = None;
         self.seat_handler.customizer_open = false;
+        self.current_cursor_icon = None;
 
         if self.surface.is_none() {
             let surface = RadialSurface::new(

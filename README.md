@@ -17,7 +17,7 @@ A GPU-accelerated, context-aware radial dial menu for Quickshell and Hyprland.
 - **Drag-to-Reorder Layout**: Click and drag any segment around the dial to reposition slices in real time. Slices highlight drop targets with preview indicators and dynamic slot badges.
 - **Dynamic Number Hotkeys (1-9)**: Visual number badges on each wedge map to keyboard shortcuts 1 through 9. Hotkeys automatically synchronize whenever slices are reordered, added, or removed.
 - **Mouse Wheel Scrubbing on Slices**: Hover over volume or brightness slices and scroll the mouse wheel to smoothly adjust levels without clicking.
-- **Direct UNIX Socket IPC**: Sub-millisecond window and cursor queries through direct connection to the Hyprland UNIX socket, eliminating process fork overhead.
+- **On-Demand UNIX Socket IPC**: Window and cursor queries use Hyprland's UNIX socket only while opening the dial; there is no background polling while the menu is closed.
 - **Optional High-Frequency Tools (Customizer)**:
   - Clipboard History: sub-ring displaying recent cliphist snippets with instant paste.
   - Audio Output Switcher: PipeWire sub-ring to switch between speakers, headphones, and Bluetooth.
@@ -144,7 +144,17 @@ You can override the automatic GPU hardware detection by adding a `performance` 
 Values for `profile`:
 - `"auto"`: Hardware detection based on `/sys/class/drm` and `lspci` (default).
 - `"low_end"`: Forces low-power optimizations, instant discrete canvas updates, simplified animation timers, and solid high-contrast wedge backgrounds.
-- `"high_performance"`: Forces high-fidelity mode with continuous spring animations and FramebufferObject rendering.
+- `"high_performance"`: Forces high-fidelity mode with continuous spring animations and compositor blur.
+
+## Performance Validation
+
+The repository includes a repeatable workload harness for closed, static, pointer-motion, and drag measurements:
+
+```bash
+python3 benchmarks/radial_benchmark.py --mode motion --repetitions 7
+```
+
+See [`benchmarks/2026-09-12-results.md`](benchmarks/2026-09-12-results.md) for the integrated-GPU measurements and the keep/discard results of the tested optimizations.
 
 Deleting `~/.config/radialMenu/config.json` restores default slices and settings.
 

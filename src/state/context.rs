@@ -21,10 +21,28 @@ impl std::fmt::Display for Context {
     }
 }
 
+/// Check if a window is a Picture-in-Picture floating video window
+pub fn is_pip_window(window_class: &str, title: &str) -> bool {
+    let c = window_class.to_lowercase();
+    let t = title.to_lowercase();
+    t.contains("picture-in-picture")
+        || t.contains("picture in picture")
+        || c == "picture-in-picture"
+        || (c.contains("firefox") && t.contains("picture"))
+        || (c.contains("zen") && t.contains("picture"))
+        || (c.contains("chrome") && t.contains("picture"))
+}
+
 /// Port of resolveContext(win) from RadialMenuActions.qml lines 123-132
 pub fn resolve_context(window_class: &str, title: &str) -> Context {
     let c = window_class.to_lowercase();
     let t = title.to_lowercase();
+
+    // Picture-in-Picture video windows must NEVER resolve to Browser context (no tabs/bookmarks).
+    // Instead, treat as Media context (video playback/volume).
+    if is_pip_window(window_class, title) {
+        return Context::Media;
+    }
 
     // Terminal: kitty, konsole, alacritty, foot (order matches QML)
     if c.contains("kitty") || c.contains("konsole") || c.contains("alacritty") || c.contains("foot") {
@@ -78,6 +96,14 @@ mod tests {
         assert_eq!(resolve_context("Google-chrome", ""), Context::Browser);
         assert_eq!(resolve_context("brave-browser", ""), Context::Browser);
         assert_eq!(resolve_context("", "firefox private browsing"), Context::Browser);
+    }
+
+    #[test]
+    fn test_resolve_context_pip() {
+        assert_eq!(resolve_context("firefox", "Picture-in-Picture"), Context::Media);
+        assert_eq!(resolve_context("firefox", "Picture in picture"), Context::Media);
+        assert_eq!(resolve_context("zen", "Picture-in-Picture"), Context::Media);
+        assert_eq!(resolve_context("google-chrome", "Picture in picture"), Context::Media);
     }
 
     #[test]

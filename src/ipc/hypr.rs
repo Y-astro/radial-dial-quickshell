@@ -31,6 +31,16 @@ pub struct HyprWindow {
     pub workspace: HyprWorkspace,
     #[serde(default)]
     pub at: Vec<i64>,
+    #[serde(default)]
+    pub size: Vec<i64>,
+    #[serde(default)]
+    pub floating: bool,
+    #[serde(default)]
+    pub pinned: bool,
+    #[serde(default)]
+    pub mapped: bool,
+    #[serde(default)]
+    pub hidden: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Deserialize, serde::Serialize)]
@@ -38,16 +48,49 @@ pub struct HyprWindow {
 pub struct HyprClient {
     pub address: String,
     pub class: String,
+    #[serde(rename = "initialClass", default)]
+    pub initial_class: String,
     pub title: String,
     pub pid: i64,
     pub workspace: HyprWorkspace,
+    #[serde(default)]
+    pub at: Vec<i64>,
+    #[serde(default)]
+    pub size: Vec<i64>,
+    #[serde(default)]
+    pub floating: bool,
+    #[serde(default)]
+    pub pinned: bool,
+    #[serde(default)]
+    pub mapped: bool,
+    #[serde(default)]
+    pub hidden: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(default)]
+pub struct HyprMonitor {
+    pub id: i64,
+    pub name: String,
+    pub x: i32,
+    pub y: i32,
+    pub width: i32,
+    pub height: i32,
+    pub scale: f64,
+    pub transform: i32,
+    pub focused: bool,
+    #[serde(rename = "activeWorkspace", default)]
+    pub active_workspace: HyprWorkspace,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(default)]
 pub struct HyprContext {
     pub cursor: HyprCursorPos,
     pub window: HyprWindow,
     pub clients: Vec<HyprClient>,
+    pub monitors: Vec<HyprMonitor>,
+    pub target_monitor_name: Option<String>,
 }
 
 /// Socket Discovery (port of hypr_ipc.py get_hypr_socket())
@@ -168,24 +211,154 @@ pub async fn dispatch(cmd: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Fetch cursor pos, active window, and all clients concurrently via tokio::join!
+/// Resolve the target monitor containing the cursor, and the surface-local cursor coordinates
+pub fn resolve_target_monitor_and_local_cursor<'a>(
+    raw_cursor: &HyprCursorPos,
+    monitors: &'a [HyprMonitor],
+) -> (Option<&'a HyprMonitor>, HyprCursorPos) {
+    if monitors.is_empty() {
+        return (None, raw_cursor.clone());
+    }
+
+    let target = monitors
+        .iter()
+        .find(|m| {
+            let (phys_w, phys_h) = if m.transform % 2 == 1 {
+                (m.height, m.width)
+            } else {
+                (m.width, m.height)
+            };
+            let scale = if m.scale > 0.0 { m.scale } else { 1.0 };
+            let log_w = (phys_w as f64 / scale).round() as f32;
+            let log_h = (phys_h as f64 / scale).round() as f32;
+
+            let min_x = m.x as f32;
+            let max_x = m.x as f32 + log_w;
+            let min_y = m.y as f32;
+            let max_y = m.y as f32 + log_h;
+
+            raw_cursor.x >= min_x && raw_cursor.x < max_x && raw_cursor.y >= min_y && raw_cursor.y < max_y
+        })
+        .or_else(|| monitors.iter().find(|m| m.focused))
+        .or_else(|| monitors.first());
+
+    let local_cursor = if let Some(m) = target {
+        HyprCursorPos {
+            x: (raw_cursor.x - m.x as f32).max(0.0),
+            y: (raw_cursor.y - m.y as f32).max(0.0),
+        }
+    } else {
+        raw_cursor.clone()
+    };
+
+    (target, local_cursor)
+}
+
+/// Resolve the effective window context based on cursor position, active workspace, and clients
+pub fn resolve_effective_window(
+    raw_cursor: &HyprCursorPos,
+    active_window: &HyprWindow,
+    clients: &[HyprClient],
+    active_workspace_id: i64,
+) -> HyprWindow {
+    let is_pip = |w_class: &str, w_title: &str| -> bool {
+        crate::state::context::is_pip_window(w_class, w_title)
+    };
+
+    // Look for client directly under raw_cursor on the active workspace
+    let mut window_under_cursor: Option<HyprWindow> = None;
+    for c in clients {
+        if !c.mapped || c.hidden {
+            continue;
+        }
+        if !c.pinned && c.workspace.id != active_workspace_id {
+            continue;
+        }
+        if c.at.len() < 2 || c.size.len() < 2 {
+            continue;
+        }
+        let wx = c.at[0] as f32;
+        let wy = c.at[1] as f32;
+        let ww = c.size[0] as f32;
+        let wh = c.size[1] as f32;
+
+        if raw_cursor.x >= wx && raw_cursor.x < wx + ww && raw_cursor.y >= wy && raw_cursor.y < wy + wh {
+            let hw = HyprWindow {
+                address: c.address.clone(),
+                class: c.class.clone(),
+                initial_class: c.initial_class.clone(),
+                title: c.title.clone(),
+                pid: c.pid,
+                workspace: c.workspace.clone(),
+                at: c.at.clone(),
+                size: c.size.clone(),
+                pinned: c.pinned,
+                floating: c.floating,
+                mapped: c.mapped,
+                hidden: c.hidden,
+            };
+            let c_is_pip = is_pip(&c.class, &c.title);
+            if window_under_cursor.is_none()
+                || c.floating
+                || (window_under_cursor.as_ref().map(|w| is_pip(&w.class, &w.title)).unwrap_or(false) && !c_is_pip)
+            {
+                window_under_cursor = Some(hw);
+            }
+        }
+    }
+
+    if let Some(w_under) = window_under_cursor {
+        w_under
+    } else {
+        // Cursor is NOT directly over any client on the active workspace (i.e. on empty desktop/workspace).
+        // If active_window is PiP or on another workspace, reset to default (empty).
+        let active_is_pip = is_pip(&active_window.class, &active_window.title);
+        let active_is_on_ws = active_window.pinned
+            || (active_window.workspace.id != 0 && active_window.workspace.id == active_workspace_id);
+
+        if active_is_pip || !active_is_on_ws {
+            HyprWindow::default()
+        } else {
+            // Check if active_window bounding box actually covers the cursor
+            let covers_cursor = if active_window.at.len() >= 2 && active_window.size.len() >= 2 {
+                let wx = active_window.at[0] as f32;
+                let wy = active_window.at[1] as f32;
+                let ww = active_window.size[0] as f32;
+                let wh = active_window.size[1] as f32;
+                raw_cursor.x >= wx && raw_cursor.x < wx + ww && raw_cursor.y >= wy && raw_cursor.y < wy + wh
+            } else {
+                false
+            };
+
+            if covers_cursor {
+                active_window.clone()
+            } else {
+                // User opened dial on empty space of the current workspace
+                HyprWindow::default()
+            }
+        }
+    }
+}
+
+/// Fetch cursor pos, active window, clients, and monitors concurrently via tokio::join!
 pub async fn get_context() -> anyhow::Result<HyprContext> {
     if get_hypr_socket().is_none() {
         return Err(anyhow::anyhow!("Hyprland socket not found"));
     }
 
-    let (cursor_res, window_res, clients_res) = tokio::join!(
+    let (cursor_res, window_res, clients_res, monitors_res) = tokio::join!(
         query("j/cursorpos"),
         query("j/activewindow"),
         query("j/clients"),
+        query("j/monitors"),
     );
 
     // If all failed, return the first error encountered
-    if cursor_res.is_err() && window_res.is_err() && clients_res.is_err() {
+    if cursor_res.is_err() && window_res.is_err() && clients_res.is_err() && monitors_res.is_err() {
         return Err(cursor_res.unwrap_err());
     }
 
-    let cursor: HyprCursorPos = cursor_res
+    let raw_cursor: HyprCursorPos = cursor_res
         .ok()
         .and_then(|v| serde_json::from_value(v).ok())
         .unwrap_or_default();
@@ -200,10 +373,31 @@ pub async fn get_context() -> anyhow::Result<HyprContext> {
         .and_then(|v| serde_json::from_value(v).ok())
         .unwrap_or_default();
 
+    let monitors: Vec<HyprMonitor> = monitors_res
+        .ok()
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or_default();
+
+    let (target_mon, local_cursor) = resolve_target_monitor_and_local_cursor(&raw_cursor, &monitors);
+    let target_monitor_name = target_mon.map(|m| m.name.clone());
+
+    let active_ws_id = target_mon
+        .map(|m| m.active_workspace.id)
+        .unwrap_or(window.workspace.id);
+
+    let effective_window = resolve_effective_window(
+        &raw_cursor,
+        &window,
+        &clients,
+        active_ws_id,
+    );
+
     Ok(HyprContext {
-        cursor,
-        window,
+        cursor: local_cursor,
+        window: effective_window,
         clients,
+        monitors,
+        target_monitor_name,
     })
 }
 
@@ -360,7 +554,9 @@ mod tests {
                             } else if req.contains("activewindow") {
                                 r#"{"address": "0x42", "class": "kitty", "initialClass": "kitty", "title": "myterm", "pid": 999, "workspace": {"id": 1, "name": "1"}, "at": [10, 20]}"#
                             } else if req.contains("clients") {
-                                r#"[{"address": "0x42", "class": "kitty", "title": "myterm", "pid": 999, "workspace": {"id": 1, "name": "1"}}]"#
+                                r#"[{"address": "0x42", "class": "kitty", "title": "myterm", "pid": 999, "workspace": {"id": 1, "name": "1"}, "at": [0, 0], "size": [1920, 1080], "mapped": true, "hidden": false}]"#
+                            } else if req.contains("monitors") {
+                                r#"[{"id": 0, "name": "eDP-1", "x": 0, "y": 0, "width": 1920, "height": 1080, "scale": 1.0, "transform": 0, "focused": true, "activeWorkspace": {"id": 1, "name": "1"}}]"#
                             } else {
                                 "ok"
                             };
@@ -453,5 +649,83 @@ mod tests {
             assert!(ctx.cursor.x >= 0.0);
             assert!(ctx.cursor.y >= 0.0);
         }
+    }
+
+    #[test]
+    fn test_multi_monitor_cursor_translation() {
+        let monitors = vec![
+            HyprMonitor {
+                id: 0,
+                name: "eDP-1".into(),
+                x: 0,
+                y: 0,
+                width: 1920,
+                height: 1080,
+                scale: 1.0,
+                transform: 0,
+                focused: false,
+                active_workspace: HyprWorkspace { id: 1, name: "1".into() },
+            },
+            HyprMonitor {
+                id: 1,
+                name: "DP-1".into(),
+                x: 1920,
+                y: 0,
+                width: 2560,
+                height: 1440,
+                scale: 1.25,
+                transform: 0,
+                focused: true,
+                active_workspace: HyprWorkspace { id: 2, name: "2".into() },
+            },
+        ];
+
+        // Cursor is on second monitor at global coordinates (2500, 500)
+        let raw_cursor = HyprCursorPos { x: 2500.0, y: 500.0 };
+        let (mon, local) = resolve_target_monitor_and_local_cursor(&raw_cursor, &monitors);
+        assert_eq!(mon.unwrap().name, "DP-1");
+        assert_eq!(local.x, 2500.0 - 1920.0);
+        assert_eq!(local.y, 500.0 - 0.0);
+    }
+
+    #[test]
+    fn test_empty_workspace_with_pip_resolves_default() {
+        let clients = vec![
+            HyprClient {
+                address: "0xpip".into(),
+                class: "firefox".into(),
+                initial_class: "firefox".into(),
+                title: "Picture-in-Picture".into(),
+                pid: 1234,
+                workspace: HyprWorkspace { id: 1, name: "1".into() },
+                at: vec![1200, 700],
+                size: vec![640, 360],
+                floating: true,
+                pinned: true,
+                mapped: true,
+                hidden: false,
+            }
+        ];
+        let active_win = HyprWindow {
+            address: "0xpip".into(),
+            class: "firefox".into(),
+            initial_class: "firefox".into(),
+            title: "Picture-in-Picture".into(),
+            pid: 1234,
+            workspace: HyprWorkspace { id: 1, name: "1".into() },
+            at: vec![1200, 700],
+            size: vec![640, 360],
+            floating: true,
+            pinned: true,
+            mapped: true,
+            hidden: false,
+        };
+        // Cursor on empty workspace 3 at (500, 400), away from the PiP window (at 1200, 700)
+        let raw_cursor = HyprCursorPos { x: 500.0, y: 400.0 };
+        let active_ws_id = 3;
+        let eff = resolve_effective_window(&raw_cursor, &active_win, &clients, active_ws_id);
+        assert_eq!(eff.class, "");
+        assert_eq!(eff.title, "");
+        assert_eq!(crate::state::context::resolve_context(&eff.class, &eff.title), crate::state::context::Context::Default);
     }
 }

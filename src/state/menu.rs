@@ -583,6 +583,7 @@ mod tests {
                     name: "1".into(),
                 },
                 at: vec![100, 100],
+                ..Default::default()
             },
             clients: vec![
                 HyprClient {
@@ -594,6 +595,7 @@ mod tests {
                         id: 1,
                         name: "1".into(),
                     },
+                    ..Default::default()
                 },
                 HyprClient {
                     address: "0x456".into(),
@@ -604,8 +606,10 @@ mod tests {
                         id: 2,
                         name: "2".into(),
                     },
+                    ..Default::default()
                 },
             ],
+            ..Default::default()
         }
     }
 
@@ -835,6 +839,7 @@ mod tests {
                     id: 1,
                     name: "1".into(),
                 },
+                ..Default::default()
             },
             HyprClient {
                 address: "0x2".into(),
@@ -845,6 +850,7 @@ mod tests {
                     id: 2,
                     name: "2".into(),
                 },
+                ..Default::default()
             },
         ];
 

@@ -102,8 +102,10 @@ pub struct App {
     pub current_cursor_icon: Option<CursorIcon>,
     pub keyboard: Option<WlKeyboard>,
 
-    // Primary output
+    // Primary output & all outputs
+    pub outputs: Vec<WlOutput>,
     pub primary_output: Option<WlOutput>,
+    pub current_output_name: Option<String>,
 
     // Surface configuration status
     pub surface_configured: bool,
@@ -170,14 +172,18 @@ impl OutputHandler for App {
         &mut self.output_state
     }
     fn new_output(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, output: WlOutput) {
+        if !self.outputs.contains(&output) {
+            self.outputs.push(output.clone());
+        }
         if self.primary_output.is_none() {
             self.primary_output = Some(output);
         }
     }
     fn update_output(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _output: WlOutput) {}
     fn output_destroyed(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, output: WlOutput) {
+        self.outputs.retain(|o| o != &output);
         if self.primary_output.as_ref() == Some(&output) {
-            self.primary_output = None;
+            self.primary_output = self.outputs.first().cloned();
         }
     }
 }
@@ -258,6 +264,7 @@ impl LayerShellHandler for App {
     fn closed(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _layer: &LayerSurface) {
         self.surface = None;
         self.surface_configured = false;
+        self.current_output_name = None;
         self.pending_open_ctx = None;
         self.menu.phase = MenuPhase::Hidden;
         self.dirty = false;
@@ -475,7 +482,9 @@ impl App {
             themed_pointer,
             current_cursor_icon: None,
             keyboard,
+            outputs: Vec::new(),
             primary_output: None,
+            current_output_name: None,
             surface_configured: false,
             pending_open_ctx: None,
             dirty: false,
@@ -1288,6 +1297,21 @@ impl App {
         false
     }
 
+    /// Find WlOutput by monitor name (e.g. "eDP-1", "DP-1")
+    pub fn find_output_by_name(&self, name: &str) -> Option<WlOutput> {
+        self.outputs
+            .iter()
+            .find(|o| {
+                if let Some(info) = self.output_state.info(o) {
+                    if let Some(n) = &info.name {
+                        return n == name;
+                    }
+                }
+                false
+            })
+            .cloned()
+    }
+
     /// Open or map radial surface and transition to Opening phase
     pub fn open_menu(&mut self, ctx: HyprContext, qh: &QueueHandle<Self>) -> Result<()> {
         self.menu.config.reload_system_colors();
@@ -1296,14 +1320,29 @@ impl App {
         self.seat_handler.customizer_open = false;
         self.current_cursor_icon = None;
 
+        let target_output = ctx
+            .target_monitor_name
+            .as_deref()
+            .and_then(|name| self.find_output_by_name(name))
+            .or_else(|| self.primary_output.clone());
+
+        // If surface already exists on a different output, drop it first to rebuild on target output
+        if self.surface.is_some() && self.current_output_name != ctx.target_monitor_name {
+            self.surface = None;
+            self.surface_configured = false;
+            self.current_output_name = None;
+        }
+
         if self.surface.is_none() {
             let surface = RadialSurface::new(
                 &self.layer_shell,
                 &self.shm,
                 &self.compositor_state,
                 qh,
+                target_output.as_ref(),
             )?;
             self.surface = Some(surface);
+            self.current_output_name = ctx.target_monitor_name.clone();
             self.surface_configured = false;
             self.pending_open_ctx = Some(ctx);
         } else if self.surface_configured {
@@ -1720,6 +1759,7 @@ impl App {
                     self.waiting_for_frame = false;
                     self.surface = None;
                     self.surface_configured = false;
+                    self.current_output_name = None;
                     self.pending_open_ctx = None;
                     if let Some(action) = action_opt {
                         execute_action(&action);

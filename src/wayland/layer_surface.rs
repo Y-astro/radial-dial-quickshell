@@ -18,7 +18,7 @@ use sctk::{
     },
     shm::{slot::SlotPool, Shm},
 };
-use wayland_client::protocol::wl_shm;
+use wayland_client::protocol::{wl_output::WlOutput, wl_shm};
 
 use anyhow::Result;
 
@@ -113,6 +113,7 @@ impl RadialSurface {
         shm: &Shm,
         compositor: &sctk::compositor::CompositorState,
         qh: &QueueHandle<State>,
+        output: Option<&WlOutput>,
     ) -> Result<Self>
     where
         State: LayerShellHandler
@@ -132,14 +133,13 @@ impl RadialSurface {
         // Create a bare wl_surface via the compositor.
         let surface = compositor.create_surface(qh);
 
-        // Wrap it in a layer surface: Overlay, fullscreen anchors, no output
-        // preference (let the compositor pick the primary output).
+        // Wrap it in a layer surface: Overlay, fullscreen anchors, targeted output.
         let layer_surface = layer_shell.create_layer_surface(
             qh,
             surface.clone(),
             Layer::Overlay,
             Some("radial-dial"),
-            None, // output: let compositor choose
+            output,
         );
 
         // Fullscreen: anchor all four edges.

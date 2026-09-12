@@ -287,8 +287,16 @@ impl SeatHandler {
         match zone {
             PointerZone::CenterHub => {
                 menu.center_hovered = true;
-                menu.hovered_index = -1;
-                menu.outer_hovered_index = -1;
+                if menu.hovered_index != -1 {
+                    menu.hovered_index = -1;
+                    menu.anim.hover_fade_start = menu.anim.hover_factor;
+                    menu.anim.hover_elapsed = 0.0;
+                }
+                if menu.outer_hovered_index != -1 {
+                    menu.outer_hovered_index = -1;
+                    menu.anim.outer_hover_fade_start = menu.anim.outer_hover_factor;
+                    menu.anim.outer_hover_elapsed = 0.0;
+                }
             }
             PointerZone::MainRing { slice_index } => {
                 menu.center_hovered = false;
@@ -296,24 +304,40 @@ impl SeatHandler {
                 if menu.hovered_index != new_idx {
                     menu.hovered_index = new_idx;
                     menu.anim.hover_factor = 0.0;
+                    menu.anim.hover_elapsed = 0.0;
                 }
-                menu.outer_hovered_index = -1;
+                if menu.outer_hovered_index != -1 {
+                    menu.outer_hovered_index = -1;
+                    menu.anim.outer_hover_fade_start = menu.anim.outer_hover_factor;
+                    menu.anim.outer_hover_elapsed = 0.0;
+                }
             }
             PointerZone::OuterSubRing { sub_index } => {
                 menu.center_hovered = false;
-                if menu.parent_slice_index >= 0 {
+                if menu.parent_slice_index >= 0 && menu.hovered_index != menu.parent_slice_index {
                     menu.hovered_index = menu.parent_slice_index;
+                    menu.anim.hover_factor = 1.0;
+                    menu.anim.hover_elapsed = 160.0;
                 }
                 let new_outer = sub_index as i32;
                 if menu.outer_hovered_index != new_outer {
                     menu.outer_hovered_index = new_outer;
                     menu.anim.outer_hover_factor = 0.0;
+                    menu.anim.outer_hover_elapsed = 0.0;
                 }
             }
             PointerZone::Outside => {
                 menu.center_hovered = false;
-                menu.hovered_index = -1;
-                menu.outer_hovered_index = -1;
+                if menu.hovered_index != -1 {
+                    menu.hovered_index = -1;
+                    menu.anim.hover_fade_start = menu.anim.hover_factor;
+                    menu.anim.hover_elapsed = 0.0;
+                }
+                if menu.outer_hovered_index != -1 {
+                    menu.outer_hovered_index = -1;
+                    menu.anim.outer_hover_fade_start = menu.anim.outer_hover_factor;
+                    menu.anim.outer_hover_elapsed = 0.0;
+                }
             }
         }
     }
@@ -697,6 +721,41 @@ mod tests {
         assert!(!menu.center_hovered);
         assert_eq!(menu.hovered_index, -1);
         assert_eq!(menu.outer_hovered_index, -1);
+    }
+
+    #[test]
+    fn test_pointer_motion_hover_ripple_reset() {
+        let mut seat = SeatHandler::new();
+        let mut menu = MenuState::new(RadialConfig::default(), false);
+        menu.center_x = 200.0;
+        menu.center_y = 200.0;
+        menu.current_slices = vec![
+            make_slice("term", "Terminal", 0),
+            make_slice("calc", "Calculator", 1),
+            make_slice("files", "Files", 2),
+            make_slice("web", "Browser", 3),
+        ];
+        menu.phase = MenuPhase::Open;
+
+        // 1. Hover slice 0 (top, y=100)
+        seat.handle_pointer_motion(&mut menu, 200.0, 100.0);
+        assert_eq!(menu.hovered_index, 0);
+        menu.anim.hover_factor = 1.0;
+        menu.anim.hover_elapsed = 160.0;
+
+        // 2. Switch to slice 1 (right, x=300, y=200)
+        seat.handle_pointer_motion(&mut menu, 300.0, 200.0);
+        assert_eq!(menu.hovered_index, 1);
+        // Both hover_factor and hover_elapsed must be reset to 0.0 to trigger ripple
+        assert_eq!(menu.anim.hover_factor, 0.0);
+        assert_eq!(menu.anim.hover_elapsed, 0.0);
+
+        // 3. Move outside dial
+        menu.anim.hover_factor = 0.8;
+        seat.handle_pointer_motion(&mut menu, 500.0, 200.0);
+        assert_eq!(menu.hovered_index, -1);
+        assert_eq!(menu.anim.hover_fade_start, 0.8);
+        assert_eq!(menu.anim.hover_elapsed, 0.0);
     }
 
     #[test]

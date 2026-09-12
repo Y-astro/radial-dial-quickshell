@@ -786,8 +786,27 @@ pub fn get_command(action: &ActionId) -> Option<String> {
         ActionId::KittyAgy => Some("sleep 0.05 && wtype 'agy --dangerously-skip-permissions' -k Return".into()),
         ActionId::KittyClear => Some("sleep 0.05 && wtype -M ctrl -k l -m ctrl".into()),
         ActionId::KittyDolphin => Some("PID=0; TARGET_PID=\"$PID\"; while true; do NEXT_PID=$(pgrep -P \"$TARGET_PID\" 2>/dev/null | tail -n 1); if [ -n \"$NEXT_PID\" ] && [ -d \"/proc/$NEXT_PID/cwd\" ]; then TARGET_PID=\"$NEXT_PID\"; else break; fi; done; CWD=$(readlink -f \"/proc/$TARGET_PID/cwd\" 2>/dev/null || echo \"$HOME\"); (dolphin \"$CWD\" || xdg-open \"$CWD\" || nautilus \"$CWD\" || thunar \"$CWD\") &".into()),
-        ActionId::FocusWindow { address, .. } => Some(format!("hyprctl dispatch focuswindow address:{}", address)),
-        ActionId::MoveToWorkspace(n) => Some(format!("hyprctl dispatch movetoworkspace {}", n)),
+        ActionId::FocusWindow { address, workspace } => {
+            let ws_dispatch = if !workspace.is_empty() {
+                if workspace.starts_with("special:") {
+                    format!("hyprctl dispatch 'hl.dsp.focus({{ workspace = \"{}\" }})'; ", workspace)
+                } else if let Ok(num) = workspace.parse::<i32>() {
+                    format!("hyprctl dispatch 'hl.dsp.focus({{ workspace = {} }})'; ", num)
+                } else {
+                    format!("hyprctl dispatch 'hl.dsp.focus({{ workspace = \"{}\" }})'; ", workspace)
+                }
+            } else {
+                String::new()
+            };
+            Some(format!(
+                "{}hyprctl dispatch 'hl.dsp.focus({{ window = \"address:{}\" }})' || hyprctl dispatch focuswindow address:{}",
+                ws_dispatch, address, address
+            ))
+        }
+        ActionId::MoveToWorkspace(n) => Some(format!(
+            "hyprctl dispatch \"hl.dsp.window.move({{ workspace = {} }})\" || hyprctl dispatch movetoworkspace {}",
+            n, n
+        )),
         ActionId::SwitchToTab(idx) => {
             if *idx >= 1 && *idx <= 8 {
                 Some(format!("wtype -M alt -k {} -m alt", idx))
@@ -808,9 +827,201 @@ pub fn get_command(action: &ActionId) -> Option<String> {
 
 /// Execute an action. Uses exact same shell commands as the original QML.
 pub fn execute(action: &ActionId) {
+    if let ActionId::JumpToFile(path) = action {
+        perform_file_jump(path);
+        return;
+    }
     if let Some(cmd) = get_command(action) {
         exec(&cmd);
     }
+}
+
+/// If target destination is on an unmounted drive/partition, auto-mount via udisksctl
+pub fn auto_mount_if_needed(target_path: &str) -> String {
+    let expanded = shellexpand::tilde(target_path).to_string();
+    let p = std::path::Path::new(&expanded);
+    if p.exists() {
+        return expanded;
+    }
+
+    // Attempt auto-mounting via lsblk -J
+    if let Ok(output) = std::process::Command::new("lsblk")
+        .args(["-J", "-o", "NAME,LABEL,UUID,MOUNTPOINTS,FSTYPE"])
+        .output()
+    {
+        if output.status.success() {
+            if let Ok(data) = serde_json::from_slice::<serde_json::Value>(&output.stdout) {
+                let mut devices = Vec::new();
+                fn collect_devs(val: &serde_json::Value, out: &mut Vec<serde_json::Value>) {
+                    if let Some(arr) = val.as_array() {
+                        for item in arr {
+                            out.push(item.clone());
+                            if let Some(children) = item.get("children") {
+                                collect_devs(children, out);
+                            }
+                        }
+                    }
+                }
+                if let Some(blockdevices) = data.get("blockdevices") {
+                    collect_devs(blockdevices, &mut devices);
+                }
+
+                for dev in devices {
+                    let name = dev.get("name").and_then(|n| n.as_str());
+                    let label = dev.get("label").and_then(|l| l.as_str());
+                    let uuid = dev.get("uuid").and_then(|u| u.as_str());
+
+                    let matches = match (label, uuid) {
+                        (Some(l), _) if !l.is_empty() && expanded.contains(l) => true,
+                        (_, Some(u)) if !u.is_empty() && expanded.contains(u) => true,
+                        _ => false,
+                    };
+
+                    if matches {
+                        if let Some(dev_name) = name {
+                            let is_mounted = dev
+                                .get("mountpoints")
+                                .and_then(|m| m.as_array())
+                                .map(|arr| {
+                                    arr.iter().any(|v| {
+                                        v.as_str()
+                                            .map(|s| !s.is_empty() && !s.starts_with('['))
+                                            .unwrap_or(false)
+                                    })
+                                })
+                                .unwrap_or(false);
+
+                            if !is_mounted {
+                                let dev_node = format!("/dev/{}", dev_name);
+                                log::info!(
+                                    "Auto-mounting block device {} for path {}",
+                                    dev_node,
+                                    expanded
+                                );
+                                let _ = std::process::Command::new("udisksctl")
+                                    .args(["mount", "-b", &dev_node])
+                                    .output();
+                                std::thread::sleep(std::time::Duration::from_millis(200));
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    expanded
+}
+
+/// Universal File Jump handler matching QML performFileJump:
+/// 1. Auto-mount removable/unmounted drives via udisksctl if needed
+/// 2. If clipboard has file URIs, copy them to destination and notify
+/// 3. Open directory in file manager (dolphin, fallback xdg-open)
+pub fn perform_file_jump(path: &str) {
+    let resolved_path = auto_mount_if_needed(path);
+    let p = std::path::Path::new(&resolved_path);
+
+    // If destination parent exists, create destination directory if it doesn't exist yet
+    if !p.exists() {
+        if let Some(parent) = p.parent() {
+            if parent.is_dir() {
+                let _ = std::fs::create_dir_all(p);
+            }
+        }
+    }
+
+    // Check clipboard for copied files/URIs
+    if let Ok(output) = std::process::Command::new("wl-paste")
+        .args(["-t", "text/uri-list"])
+        .output()
+    {
+        if output.status.success() {
+            let uris_str = String::from_utf8_lossy(&output.stdout);
+            let mut copied = 0;
+            let dest_dir = std::path::Path::new(&resolved_path);
+            if dest_dir.is_dir() {
+                for line in uris_str.lines() {
+                    let line = line.trim();
+                    if let Some(encoded) = line.strip_prefix("file://") {
+                        let decoded = decode_percent(encoded);
+                        let src_path = std::path::Path::new(&decoded);
+                        if src_path.exists() {
+                            if let Some(file_name) = src_path.file_name() {
+                                let target_file = dest_dir.join(file_name);
+                                if src_path.is_dir() {
+                                    if copy_dir_all(src_path, &target_file).is_ok() {
+                                        copied += 1;
+                                    }
+                                } else if std::fs::copy(src_path, &target_file).is_ok() {
+                                    copied += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if copied > 0 {
+                let _ = std::process::Command::new("notify-send")
+                    .args([
+                        "-a",
+                        "Radial Menu",
+                        "File Jump",
+                        &format!("Copied {} item(s) to {}", copied, resolved_path),
+                    ])
+                    .spawn();
+            }
+        }
+    }
+
+    let target = if std::path::Path::new(&resolved_path).exists() {
+        resolved_path.as_str()
+    } else if let Some(parent) = std::path::Path::new(&resolved_path).parent() {
+        if parent.exists() {
+            parent.to_str().unwrap_or(&resolved_path)
+        } else {
+            "~"
+        }
+    } else {
+        "~"
+    };
+
+    let cmd = format!("(dolphin \"{}\" || xdg-open \"{}\") &", target, target);
+    exec(&cmd);
+}
+
+fn copy_dir_all(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let ty = entry.file_type()?;
+        if ty.is_dir() {
+            copy_dir_all(&entry.path(), &dst.join(entry.file_name()))?;
+        } else {
+            std::fs::copy(entry.path(), dst.join(entry.file_name()))?;
+        }
+    }
+    Ok(())
+}
+
+fn decode_percent(s: &str) -> String {
+    let mut bytes = Vec::new();
+    let mut chars = s.bytes().peekable();
+    while let Some(b) = chars.next() {
+        if b == b'%' {
+            let h1 = chars.next();
+            let h2 = chars.next();
+            if let (Some(h1), Some(h2)) = (h1, h2) {
+                let hex_str = [h1, h2];
+                if let Ok(byte) = u8::from_str_radix(std::str::from_utf8(&hex_str).unwrap_or(""), 16) {
+                    bytes.push(byte);
+                    continue;
+                }
+            }
+        }
+        bytes.push(b);
+    }
+    String::from_utf8(bytes).unwrap_or_else(|_| s.to_string())
 }
 
 #[cfg(test)]
@@ -938,13 +1149,13 @@ mod tests {
         };
         assert_eq!(
             get_command(&focus),
-            Some("hyprctl dispatch focuswindow address:0x1234abcd".into())
+            Some("hyprctl dispatch 'hl.dsp.focus({ workspace = 1 })'; hyprctl dispatch 'hl.dsp.focus({ window = \"address:0x1234abcd\" })' || hyprctl dispatch focuswindow address:0x1234abcd".into())
         );
 
         let move_ws = ActionId::MoveToWorkspace(3);
         assert_eq!(
             get_command(&move_ws),
-            Some("hyprctl dispatch movetoworkspace 3".into())
+            Some("hyprctl dispatch \"hl.dsp.window.move({ workspace = 3 })\" || hyprctl dispatch movetoworkspace 3".into())
         );
 
         let tab3 = ActionId::SwitchToTab(3);
@@ -1008,5 +1219,19 @@ mod tests {
         assert!(special.has_sub_tier);
         assert_eq!(special.sub_tier_type, Some(SubTierType::Scratchpad));
         assert_eq!(special.action, None);
+    }
+
+    #[test]
+    fn test_decode_percent() {
+        assert_eq!(decode_percent("hello%20world"), "hello world");
+        assert_eq!(decode_percent("normal_path/file.txt"), "normal_path/file.txt");
+        assert_eq!(decode_percent("%2Fhome%2Fuser"), "/home/user");
+    }
+
+    #[test]
+    fn test_auto_mount_existing_path() {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+        let res = auto_mount_if_needed(&home);
+        assert_eq!(res, home);
     }
 }

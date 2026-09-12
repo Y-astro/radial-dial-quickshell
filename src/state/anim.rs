@@ -96,7 +96,9 @@ pub struct AnimState {
     pub overall_opacity: f32,     // 0.0..1.0  global entrance fade
     pub opening_elapsed: f32,
     pub hover_elapsed: f32,
+    pub hover_fade_start: f32,
     pub outer_hover_elapsed: f32,
+    pub outer_hover_fade_start: f32,
     pub closing_elapsed: f32,
     pub sub_elapsed: f32,
 }
@@ -113,7 +115,9 @@ impl Default for AnimState {
             overall_opacity: 0.0,
             opening_elapsed: 0.0,
             hover_elapsed: 0.0,
+            hover_fade_start: 1.0,
             outer_hover_elapsed: 0.0,
+            outer_hover_fade_start: 1.0,
             closing_elapsed: 0.0,
             sub_elapsed: 0.0,
         }

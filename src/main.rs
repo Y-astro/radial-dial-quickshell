@@ -743,9 +743,12 @@ impl App {
                 } else if self.menu.anim.hover_factor > 0.002 {
                     self.menu.anim.hover_elapsed = (self.menu.anim.hover_elapsed + dt).min(120.0);
                     let t = (self.menu.anim.hover_elapsed / 120.0).clamp(0.0, 1.0);
-                    let next = (1.0 - Easing::OutQuad.value(t)).max(0.0);
-                    self.menu.anim.hover_factor = next;
-                    self.dirty = true;
+                    let fade_start = if self.menu.anim.hover_fade_start > 0.001 { self.menu.anim.hover_fade_start } else { 1.0 };
+                    let next = (fade_start * (1.0 - Easing::OutQuad.value(t))).max(0.0);
+                    if (next - self.menu.anim.hover_factor).abs() > 0.002 {
+                        self.menu.anim.hover_factor = next;
+                        self.dirty = true;
+                    }
                 } else {
                     self.menu.anim.hover_factor = 0.0;
                 }
@@ -762,9 +765,12 @@ impl App {
                 } else if self.menu.anim.outer_hover_factor > 0.002 {
                     self.menu.anim.outer_hover_elapsed = (self.menu.anim.outer_hover_elapsed + dt).min(100.0);
                     let t = (self.menu.anim.outer_hover_elapsed / 100.0).clamp(0.0, 1.0);
-                    let next = (1.0 - Easing::OutQuad.value(t)).max(0.0);
-                    self.menu.anim.outer_hover_factor = next;
-                    self.dirty = true;
+                    let fade_start = if self.menu.anim.outer_hover_fade_start > 0.001 { self.menu.anim.outer_hover_fade_start } else { 1.0 };
+                    let next = (fade_start * (1.0 - Easing::OutQuad.value(t))).max(0.0);
+                    if (next - self.menu.anim.outer_hover_factor).abs() > 0.002 {
+                        self.menu.anim.outer_hover_factor = next;
+                        self.dirty = true;
+                    }
                 } else {
                     self.menu.anim.outer_hover_factor = 0.0;
                 }

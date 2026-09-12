@@ -1,0 +1,57 @@
+[package]
+name = "radial-dial"
+version = "0.1.0"
+edition = "2021"
+description = "Standalone native Wayland radial dial menu for Hyprland"
+
+[[bin]]
+name = "radial-dial"
+path = "src/main.rs"
+
+[[bin]]
+name = "radial-tabs-host"
+path = "src/ipc/native_host.rs"
+
+[dependencies]
+# Wayland protocol client layer
+smithay-client-toolkit = { version = "0.18", features = ["calloop"] }
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }
+wayland-client = "0.31"
+calloop = "0.13"
+
+# 2D rendering (SIMD software rasterizer)
+tiny-skia = "0.11"
+
+# Font shaping + rasterization (TTF/OTF + variable font axes)
+cosmic-text = "0.12"
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# JSON config + serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# File system watcher (inotify for SHM tabs + config)
+notify = "6"
+
+# Color manipulation (lighter/darker for gradient stops)
+palette = "0.7"
+
+# Tilde expansion for paths (~/.config/...)
+shellexpand = "3"
+
+# Error handling
+anyhow = "1"
+thiserror = "1"
+libc = "0.2"
+
+# Logging
+log = "0.4"
+env_logger = "0.11"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true

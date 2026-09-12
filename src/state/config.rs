@@ -50,6 +50,9 @@ pub struct RadialConfig {
 
     #[serde(default)]
     pub colors: Option<ColorsConfig>,
+
+    #[serde(default)]
+    pub has_explicit_colors: bool,
 }
 
 fn default_global_slices() -> Vec<String> {
@@ -115,46 +118,96 @@ impl RadialConfig {
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default();
 
-        if cfg.colors.as_ref().and_then(|c| c.primary.as_ref()).is_none() {
-            let mut detected_primary = None;
-            let mut detected_on_primary = None;
-            for qml_path in &[
-                shellexpand::tilde("~/.config/quickshell/ii/modules/common/Appearance.qml").to_string(),
-                shellexpand::tilde("~/.config/quickshell/end4-pC/modules/common/Appearance.qml").to_string(),
-            ] {
-                if let Ok(content) = std::fs::read_to_string(qml_path) {
-                    for line in content.lines() {
-                        if line.contains("m3primary:") {
-                            if let Some(start) = line.find('"') {
-                                if let Some(end) = line[start + 1..].find('"') {
-                                    detected_primary = Some(line[start + 1..start + 1 + end].to_string());
-                                }
-                            }
-                        }
-                        if line.contains("m3onPrimary:") {
-                            if let Some(start) = line.find('"') {
-                                if let Some(end) = line[start + 1..].find('"') {
-                                    detected_on_primary = Some(line[start + 1..start + 1 + end].to_string());
-                                }
-                            }
-                        }
-                    }
-                    if detected_primary.is_some() {
-                        break;
-                    }
-                }
-            }
-            if let Some(prim) = detected_primary {
-                let mut colors = cfg.colors.unwrap_or_default();
-                colors.primary = Some(prim);
-                if let Some(on_p) = detected_on_primary {
-                    colors.on_primary = Some(on_p);
-                }
-                cfg.colors = Some(colors);
+        let has_explicit = cfg.colors.as_ref().and_then(|c| c.primary.as_ref()).is_some();
+        cfg.has_explicit_colors = has_explicit;
+
+        if !has_explicit {
+            if let Some(sys_colors) = Self::load_system_colors() {
+                cfg.colors = Some(sys_colors);
             }
         }
 
         cfg
+    }
+
+    /// Load dynamic system theme colors from generated colors.json or fallback Appearance.qml
+    pub fn load_system_colors() -> Option<ColorsConfig> {
+        // 1. Primary source: ~/.local/state/quickshell/user/generated/colors.json (produced by switchwall / Matugen)
+        let json_path = shellexpand::tilde("~/.local/state/quickshell/user/generated/colors.json").to_string();
+        if let Ok(content) = std::fs::read_to_string(&json_path) {
+            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
+                let primary = val.get("primary").and_then(|v| v.as_str()).map(String::from);
+                let on_primary = val.get("on_primary").and_then(|v| v.as_str()).map(String::from);
+                let surface = val.get("surface").and_then(|v| v.as_str()).map(String::from);
+                let subtext = val.get("outline").and_then(|v| v.as_str())
+                    .or_else(|| val.get("on_surface_variant").and_then(|v| v.as_str()))
+                    .map(String::from);
+
+                if primary.is_some() || on_primary.is_some() || surface.is_some() {
+                    return Some(ColorsConfig {
+                        primary,
+                        on_primary,
+                        surface,
+                        subtext,
+                    });
+                }
+            }
+        }
+
+        // 2. Secondary fallback: Appearance.qml
+        let mut detected_primary = None;
+        let mut detected_on_primary = None;
+        for qml_path in &[
+            shellexpand::tilde("~/.config/quickshell/ii/modules/common/Appearance.qml").to_string(),
+            shellexpand::tilde("~/.config/quickshell/end4-pC/modules/common/Appearance.qml").to_string(),
+        ] {
+            if let Ok(content) = std::fs::read_to_string(qml_path) {
+                for line in content.lines() {
+                    if line.contains("m3primary:") {
+                        if let Some(start) = line.find('"') {
+                            if let Some(end) = line[start + 1..].find('"') {
+                                detected_primary = Some(line[start + 1..start + 1 + end].to_string());
+                            }
+                        }
+                    }
+                    if line.contains("m3onPrimary:") {
+                        if let Some(start) = line.find('"') {
+                            if let Some(end) = line[start + 1..].find('"') {
+                                detected_on_primary = Some(line[start + 1..start + 1 + end].to_string());
+                            }
+                        }
+                    }
+                }
+                if detected_primary.is_some() {
+                    break;
+                }
+            }
+        }
+
+        if detected_primary.is_some() || detected_on_primary.is_some() {
+            return Some(ColorsConfig {
+                primary: detected_primary,
+                on_primary: detected_on_primary,
+                surface: None,
+                subtext: None,
+            });
+        }
+
+        None
+    }
+
+    /// Dynamically reload system theme colors if colors.json was modified and user hasn't specified explicit colors
+    pub fn reload_system_colors(&mut self) -> bool {
+        if !self.has_explicit_colors {
+            if let Some(sys_colors) = Self::load_system_colors() {
+                if self.colors.as_ref() != Some(&sys_colors) {
+                    log::info!("System colors reloaded dynamically: primary={:?}", sys_colors.primary);
+                    self.colors = Some(sys_colors);
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     /// Atomic write: write to temp file, then rename (prevents corruption)
@@ -265,6 +318,17 @@ impl RadialConfig {
         }
     }
 
+    /// Reset slices for a specific context to default factory slices
+    pub fn reset_context(&mut self, context: &str) {
+        match context {
+            "kitty"   => self.kitty_slices = default_kitty_slices(),
+            "browser" => self.browser_slices = default_browser_slices(),
+            "code"    => self.code_slices = default_code_slices(),
+            "media"   => self.media_slices = default_media_slices(),
+            _         => self.global_slices = default_global_slices(),
+        }
+    }
+
     /// Reset to factory defaults
     pub fn reset() -> Self {
         Self::default()
@@ -282,6 +346,7 @@ impl Default for RadialConfig {
             file_jump_targets: default_file_jump_targets(),
             performance: None,
             colors: None,
+            has_explicit_colors: false,
         }
     }
 }
@@ -454,6 +519,18 @@ mod tests {
         assert!(cfg.global_slices.is_empty());
         let reset_cfg = RadialConfig::reset();
         assert_eq!(reset_cfg.global_slices, default_global_slices());
+    }
+
+    #[test]
+    fn test_reset_context() {
+        let mut cfg = RadialConfig::default();
+        cfg.kitty_slices = vec!["custom1".into(), "custom2".into()];
+        cfg.reset_context("kitty");
+        assert_eq!(cfg.kitty_slices, default_kitty_slices());
+
+        cfg.global_slices = vec!["custom_g".into()];
+        cfg.reset_context("default");
+        assert_eq!(cfg.global_slices, default_global_slices());
     }
 
     #[test]

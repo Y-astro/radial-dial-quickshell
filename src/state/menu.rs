@@ -244,6 +244,27 @@ impl MenuState {
         }
     }
 
+    /// Re-resolves and updates current slices from config for the active context
+    pub fn refresh_current_slices(&mut self) {
+        let in_special = is_in_special_workspace(
+            self.window_info.workspace.id,
+            &self.window_info.workspace.name,
+        );
+        let slice_ids = self.config.get_active_slice_ids(&self.context.to_string());
+        self.current_slices = slice_ids
+            .iter()
+            .enumerate()
+            .map(|(idx, id)| crate::state::actions::resolve_slice_item(id, idx, in_special))
+            .collect();
+    }
+
+    /// Re-generates sub slices for the active sub tier if open
+    pub fn refresh_sub_slices(&mut self) {
+        if let Some(tier) = self.active_sub_tier {
+            self.sub_slices = self.generate_sub_slices(tier);
+        }
+    }
+
     /// Handles Escape key: closes sub-tier if open (returns false), or closes menu (returns true)
     pub fn handle_escape(&mut self) -> bool {
         if self.active_sub_tier.is_some() {

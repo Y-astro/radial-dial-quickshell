@@ -208,6 +208,23 @@ pub fn parse_number_key(keysym: u32) -> Option<usize> {
     }
 }
 
+/// Convert an XKB keysym into a printable character if applicable.
+#[inline]
+pub fn keysym_to_char(keysym: u32) -> Option<char> {
+    match keysym {
+        0x20..=0x7e => char::from_u32(keysym),
+        0x00a0..=0x00ff => char::from_u32(keysym),
+        0xffb0..=0xffb9 => char::from_u32('0' as u32 + (keysym - 0xffb0)),
+        0xffac => Some('*'),
+        0xffab => Some('+'),
+        0xffad => Some('-'),
+        0xffae => Some('.'),
+        0xffaf => Some('/'),
+        0x01000100..=0x0110ffff => char::from_u32(keysym - 0x01000000),
+        _ => None,
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Seat Handler
 // ─────────────────────────────────────────────────────────────────────────────

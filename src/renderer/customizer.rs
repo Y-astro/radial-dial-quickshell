@@ -68,6 +68,27 @@ pub fn col_danger() -> Color {
     Color::from_rgba8(255, 107, 107, 255) // #ff6b6b
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CustomizerColors {
+    pub primary: Color,
+    pub on_primary: Color,
+    pub on_surface: Color,
+    pub subtext: Color,
+    pub card_bg: Color,
+}
+
+impl Default for CustomizerColors {
+    fn default() -> Self {
+        Self {
+            primary: col_primary(),
+            on_primary: col_on_primary(),
+            on_surface: col_on_surface(),
+            subtext: col_subtext(),
+            card_bg: col_card_bg(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum CustomizerMode {
     SliceSwap { slot_index: usize },
@@ -273,7 +294,15 @@ pub fn render_customizer(
         return;
     }
     CUSTOMIZER_FONT_RENDERER.with(|fr| {
-        render_customizer_with_font(state, catalogue, pixmap, screen_w, screen_h, &mut fr.borrow_mut());
+        render_customizer_with_font(
+            state,
+            catalogue,
+            pixmap,
+            screen_w,
+            screen_h,
+            &mut fr.borrow_mut(),
+            CustomizerColors::default(),
+        );
     });
 }
 
@@ -285,6 +314,7 @@ pub fn render_customizer_with_font(
     screen_w: f32,
     screen_h: f32,
     font_renderer: &mut FontRenderer,
+    colors: CustomizerColors,
 ) {
     if !state.is_open || screen_w <= 0.0 || screen_h <= 0.0 {
         return;
@@ -316,7 +346,7 @@ pub fn render_customizer_with_font(
     );
 
     // Card background fill
-    fill_rounded_rect(pixmap, card_x, card_y, card_w, card_h, CARD_RADIUS, col_card_bg());
+    fill_rounded_rect(pixmap, card_x, card_y, card_w, card_h, CARD_RADIUS, colors.card_bg);
 
     // Card border
     stroke_rounded_rect(
@@ -359,7 +389,8 @@ pub fn render_customizer_with_font(
         icon_box_size,
         icon_box_size,
         12.0,
-        Color::from_rgba8(168, 197, 253, 46),
+        Color::from_rgba(colors.primary.red(), colors.primary.green(), colors.primary.blue(), 0.18)
+            .unwrap_or(colors.primary),
     );
     stroke_rounded_rect(
         pixmap,
@@ -368,7 +399,7 @@ pub fn render_customizer_with_font(
         icon_box_size,
         icon_box_size,
         12.0,
-        col_primary(),
+        colors.primary,
         1.0,
     );
 
@@ -403,7 +434,7 @@ pub fn render_customizer_with_font(
         icon_box_x + icon_box_size / 2.0,
         icon_box_y + icon_box_size / 2.0,
         22.0,
-        col_primary(),
+        colors.primary,
     );
 
     let title_x = icon_box_x + icon_box_size + 12.0;
@@ -414,7 +445,7 @@ pub fn render_customizer_with_font(
         title_x,
         icon_box_y + 11.0,
         15.0,
-        col_on_surface(),
+        colors.on_surface,
     );
     draw_text_left(
         font_renderer,
@@ -423,7 +454,7 @@ pub fn render_customizer_with_font(
         title_x,
         icon_box_y + 27.0,
         11.0,
-        col_subtext(),
+        colors.subtext,
     );
 
     // Close button on the top right
@@ -456,7 +487,7 @@ pub fn render_customizer_with_font(
         close_x + close_size / 2.0,
         close_y + close_size / 2.0,
         18.0,
-        col_on_surface(),
+        colors.on_surface,
     );
 
     // 4. Body Content per Mode
@@ -471,6 +502,7 @@ pub fn render_customizer_with_font(
                 card_h,
                 pixmap,
                 font_renderer,
+                colors,
             );
         }
         CustomizerMode::FileTargetEdit { target_index } => {
@@ -483,6 +515,7 @@ pub fn render_customizer_with_font(
                 card_h,
                 pixmap,
                 font_renderer,
+                colors,
             );
         }
         CustomizerMode::FileTargetAdd => {
@@ -495,6 +528,7 @@ pub fn render_customizer_with_font(
                 card_h,
                 pixmap,
                 font_renderer,
+                colors,
             );
         }
     }
@@ -511,6 +545,7 @@ fn render_slice_swap_body(
     _card_h: f32,
     pixmap: &mut Pixmap,
     font_renderer: &mut FontRenderer,
+    colors: CustomizerColors,
 ) {
     // 1. Category Tabs (All, Apps, Tools, Media, Window, System)
     let tabs_y = card_y + 64.0;
@@ -524,7 +559,7 @@ fn render_slice_swap_body(
         let is_active = state.active_category.eq_ignore_ascii_case(cat);
 
         if is_active {
-            fill_rounded_rect(pixmap, tx, tabs_y, tab_w, tab_h, 14.0, col_primary());
+            fill_rounded_rect(pixmap, tx, tabs_y, tab_w, tab_h, 14.0, colors.primary);
             draw_text(
                 font_renderer,
                 pixmap,
@@ -532,7 +567,7 @@ fn render_slice_swap_body(
                 tx + tab_w / 2.0,
                 tabs_y + tab_h / 2.0,
                 11.0,
-                col_on_primary(),
+                colors.on_primary,
             );
         } else {
             fill_rounded_rect(
@@ -561,7 +596,7 @@ fn render_slice_swap_body(
                 tx + tab_w / 2.0,
                 tabs_y + tab_h / 2.0,
                 11.0,
-                col_on_surface(),
+                colors.on_surface,
             );
         }
     }
@@ -619,7 +654,7 @@ fn render_slice_swap_body(
             query_x,
             search_y + search_h / 2.0,
             12.0,
-            col_on_surface(),
+            colors.on_surface,
         );
 
         // Clear query icon
@@ -647,7 +682,7 @@ fn render_slice_swap_body(
             content_x + content_w / 2.0,
             list_y + list_h / 2.0,
             13.0,
-            col_subtext(),
+            colors.subtext,
         );
     } else {
         let item_h = 50.0;
@@ -674,7 +709,8 @@ fn render_slice_swap_body(
                     content_w,
                     item_h,
                     12.0,
-                    Color::from_rgba8(168, 197, 253, 51),
+                    Color::from_rgba(colors.primary.red(), colors.primary.green(), colors.primary.blue(), 0.20)
+                        .unwrap_or(colors.primary),
                 );
                 stroke_rounded_rect(
                     pixmap,
@@ -683,7 +719,7 @@ fn render_slice_swap_body(
                     content_w,
                     item_h,
                     12.0,
-                    col_primary(),
+                    colors.primary,
                     1.5,
                 );
             } else {
@@ -713,16 +749,17 @@ fn render_slice_swap_body(
             let ib_y = cur_y + 8.0;
             let ib_size = 34.0;
             let ib_bg = if is_selected {
-                Color::from_rgba8(168, 197, 253, 46)
+                Color::from_rgba(colors.primary.red(), colors.primary.green(), colors.primary.blue(), 0.18)
+                    .unwrap_or(colors.primary)
             } else {
                 Color::from_rgba8(255, 255, 255, 15)
             };
             fill_rounded_rect(pixmap, ib_x, ib_y, ib_size, ib_size, 10.0, ib_bg);
 
             let icon_col = if is_selected {
-                col_primary()
+                colors.primary
             } else {
-                col_on_surface()
+                colors.on_surface
             };
             draw_icon(
                 font_renderer,
@@ -743,7 +780,7 @@ fn render_slice_swap_body(
                 text_x,
                 cur_y + 16.0,
                 13.0,
-                col_on_surface(),
+                colors.on_surface,
             );
 
             let desc = if item.desc.is_empty() {
@@ -758,7 +795,7 @@ fn render_slice_swap_body(
                 text_x,
                 cur_y + 33.0,
                 10.0,
-                col_subtext(),
+                colors.subtext,
             );
 
             // Right action button (+ Add or - Remove)
@@ -797,7 +834,7 @@ fn render_slice_swap_body(
                     col_danger(),
                 );
             } else {
-                fill_rounded_rect(pixmap, btn_x, btn_y, btn_w, btn_h, 13.0, col_primary());
+                fill_rounded_rect(pixmap, btn_x, btn_y, btn_w, btn_h, 13.0, colors.primary);
                 draw_text(
                     font_renderer,
                     pixmap,
@@ -805,7 +842,7 @@ fn render_slice_swap_body(
                     btn_x + btn_w / 2.0,
                     btn_y + btn_h / 2.0,
                     10.0,
-                    col_on_primary(),
+                    colors.on_primary,
                 );
             }
         }
@@ -857,7 +894,7 @@ fn render_slice_swap_body(
         content_x + 16.0,
         footer_y + reset_btn_h / 2.0,
         14.0,
-        col_subtext(),
+        colors.subtext,
     );
     draw_text_left(
         font_renderer,
@@ -866,7 +903,7 @@ fn render_slice_swap_body(
         content_x + 28.0,
         footer_y + reset_btn_h / 2.0,
         11.0,
-        col_on_surface(),
+        colors.on_surface,
     );
 
     // Right side count indicator
@@ -878,7 +915,7 @@ fn render_slice_swap_body(
         content_x + content_w - 75.0,
         footer_y + reset_btn_h / 2.0,
         11.0,
-        col_subtext(),
+        colors.subtext,
     );
 }
 
@@ -893,6 +930,7 @@ fn render_file_target_body(
     _card_h: f32,
     pixmap: &mut Pixmap,
     font_renderer: &mut FontRenderer,
+    colors: CustomizerColors,
 ) {
     // 1. Display Name Input Field
     let label_hdr_y = card_y + 68.0;
@@ -903,7 +941,7 @@ fn render_file_target_body(
         content_x,
         label_hdr_y,
         11.0,
-        col_subtext(),
+        colors.subtext,
     );
 
     let label_box_y = card_y + 84.0;
@@ -918,7 +956,7 @@ fn render_file_target_body(
         col_input_bg(),
     );
     let (border_col, border_w) = if state.focused_field == 0 {
-        (col_primary(), 1.5)
+        (colors.primary, 1.5)
     } else {
         (col_input_border(), 1.0)
     };
@@ -957,7 +995,7 @@ fn render_file_target_body(
             label_text_x,
             label_box_y + label_box_h / 2.0,
             13.0,
-            col_on_surface(),
+            colors.on_surface,
         );
     }
 
@@ -970,7 +1008,7 @@ fn render_file_target_body(
         content_x,
         path_hdr_y,
         11.0,
-        col_subtext(),
+        colors.subtext,
     );
 
     let path_box_y = card_y + 154.0;
@@ -988,7 +1026,7 @@ fn render_file_target_body(
         col_input_bg(),
     );
     let (p_border_col, p_border_w) = if state.focused_field == 1 {
-        (col_primary(), 1.5)
+        (colors.primary, 1.5)
     } else {
         (col_input_border(), 1.0)
     };
@@ -1027,7 +1065,7 @@ fn render_file_target_body(
             path_text_x,
             path_box_y + path_box_h / 2.0,
             12.0,
-            col_on_surface(),
+            colors.on_surface,
         );
     }
 
@@ -1059,7 +1097,7 @@ fn render_file_target_body(
         browse_x + 22.0,
         path_box_y + path_box_h / 2.0,
         16.0,
-        col_primary(),
+        colors.primary,
     );
     draw_text_left(
         font_renderer,
@@ -1068,7 +1106,7 @@ fn render_file_target_body(
         browse_x + 38.0,
         path_box_y + path_box_h / 2.0,
         11.0,
-        col_on_surface(),
+        colors.on_surface,
     );
 
     // 3. Choose Icon Picker Grid (2 rows of 8 icons)
@@ -1080,7 +1118,7 @@ fn render_file_target_body(
         content_x,
         icon_hdr_y,
         11.0,
-        col_subtext(),
+        colors.subtext,
     );
 
     let grid_y = card_y + 226.0;
@@ -1098,7 +1136,7 @@ fn render_file_target_body(
         let is_selected = state.input_icon == *icon_name;
 
         if is_selected {
-            fill_rounded_rect(pixmap, ix, iy, icon_w, icon_h, 10.0, col_primary());
+            fill_rounded_rect(pixmap, ix, iy, icon_w, icon_h, 10.0, colors.primary);
             draw_icon(
                 font_renderer,
                 pixmap,
@@ -1106,7 +1144,7 @@ fn render_file_target_body(
                 ix + icon_w / 2.0,
                 iy + icon_h / 2.0,
                 20.0,
-                col_on_primary(),
+                colors.on_primary,
             );
         } else {
             fill_rounded_rect(
@@ -1135,7 +1173,7 @@ fn render_file_target_body(
                 ix + icon_w / 2.0,
                 iy + icon_h / 2.0,
                 20.0,
-                col_on_surface(),
+                colors.on_surface,
             );
         }
     }
@@ -1219,11 +1257,11 @@ fn render_file_target_body(
         cancel_x + cancel_w / 2.0,
         btns_y + btns_h / 2.0,
         12.0,
-        col_on_surface(),
+        colors.on_surface,
     );
 
     // Save / Add Target button
-    fill_rounded_rect(pixmap, save_x, btns_y, save_w, btns_h, 10.0, col_primary());
+    fill_rounded_rect(pixmap, save_x, btns_y, save_w, btns_h, 10.0, colors.primary);
     draw_icon(
         font_renderer,
         pixmap,
@@ -1231,7 +1269,7 @@ fn render_file_target_body(
         save_x + 22.0,
         btns_y + btns_h / 2.0,
         16.0,
-        col_on_primary(),
+        colors.on_primary,
     );
     let save_text = if target_index.is_some() {
         "Save"
@@ -1245,7 +1283,7 @@ fn render_file_target_body(
         save_x + 36.0,
         btns_y + btns_h / 2.0,
         12.0,
-        col_on_primary(),
+        colors.on_primary,
     );
 }
 

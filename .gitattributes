@@ -1,0 +1,4 @@
+# GitHub Linguist overrides
+# Treat legacy QML and SCSS assets as vendored so repository statistics accurately reflect Rust
+*.qml linguist-vendored
+*.scss linguist-vendored

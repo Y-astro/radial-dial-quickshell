@@ -49,7 +49,7 @@ use wayland_client::globals::registry_queue_init;
 
 use font::FontRenderer;
 use ipc::hypr::HyprContext;
-use renderer::customizer::CustomizerState;
+use renderer::customizer::{CustomizerColors, CustomizerMode, CustomizerState};
 use renderer::folder_browser::FolderBrowserState;
 use renderer::hub::draw_center_hub;
 use renderer::pie::{
@@ -62,9 +62,12 @@ use state::actions::execute as execute_action;
 use state::anim::Easing;
 use state::config::RadialConfig;
 use state::gpu::{detect_gpu_profile, GpuProfile};
+use state::actions::SubTierType;
 use state::menu::{MenuPhase, MenuState};
 use wayland::layer_surface::RadialSurface;
-use wayland::seat::{ButtonState, KeyState, SeatHandler};
+use wayland::seat::{
+    is_escape, is_left_button, is_right_button, keysym_to_char, ButtonState, KeyState, SeatHandler,
+};
 
 const SOCKET_PATH: &str = "/tmp/radial-dial.sock";
 
@@ -267,33 +270,22 @@ impl PointerHandler for App {
             match event.kind {
                 PointerEventKind::Motion { .. } => {
                     let (x, y) = event.position;
-                    self.seat_handler.handle_pointer_motion(&mut self.menu, x as f32, y as f32);
+                    if self.customizer.is_some() || self.folder_browser.is_some() {
+                        self.seat_handler.last_x = x as f32;
+                        self.seat_handler.last_y = y as f32;
+                    } else {
+                        self.seat_handler.handle_pointer_motion(&mut self.menu, x as f32, y as f32);
+                    }
                 }
                 PointerEventKind::Press { button, .. } => {
-                    if let Some(action) = self.seat_handler.handle_pointer_button(
-                        &mut self.menu,
-                        button,
-                        ButtonState::Pressed,
-                    ) {
-                        self.menu.transition_close_animated(Some(action));
-                    }
+                    let (x, y) = event.position;
+                    self.handle_pointer_press(button, x as f32, y as f32);
                 }
                 PointerEventKind::Release { button, .. } => {
-                    if let Some(action) = self.seat_handler.handle_pointer_button(
-                        &mut self.menu,
-                        button,
-                        ButtonState::Released,
-                    ) {
-                        self.menu.transition_close_animated(Some(action));
-                    }
+                    self.handle_pointer_release(button);
                 }
                 PointerEventKind::Axis { vertical, .. } => {
-                    if let Some(action) = self
-                        .seat_handler
-                        .handle_pointer_axis(&mut self.menu, vertical.absolute)
-                    {
-                        execute_action(&action);
-                    }
+                    self.handle_pointer_axis(vertical.absolute);
                 }
                 _ => {}
             }
@@ -335,6 +327,9 @@ impl KeyboardHandler for App {
         }
         self.dirty = true;
         let keysym = event.keysym.raw();
+        if self.handle_customizer_or_folder_key(keysym) {
+            return;
+        }
         if let Some(action) =
             self.seat_handler.handle_key_event(&mut self.menu, keysym, KeyState::Pressed)
         {
@@ -354,6 +349,9 @@ impl KeyboardHandler for App {
         }
         self.dirty = true;
         let keysym = event.keysym.raw();
+        if self.customizer.is_some() || self.folder_browser.is_some() {
+            return;
+        }
         if let Some(action) =
             self.seat_handler.handle_key_event(&mut self.menu, keysym, KeyState::Released)
         {
@@ -416,8 +414,594 @@ impl App {
         })
     }
 
+    /// Handle pointer press events with modal customizer/folder-browser routing
+    fn handle_pointer_press(&mut self, button: u32, x: f32, y: f32) {
+        // If folder browser modal is open:
+        if self.folder_browser.is_some() {
+            if is_right_button(button) {
+                self.folder_browser = None;
+                self.dirty = true;
+                return;
+            }
+            if is_left_button(button) {
+                self.handle_folder_browser_click(x, y);
+                return;
+            }
+            return;
+        }
+
+        // If customizer modal is open:
+        if self.customizer.is_some() {
+            if is_right_button(button) {
+                self.customizer = None;
+                self.seat_handler.customizer_open = false;
+                self.dirty = true;
+                return;
+            }
+            if is_left_button(button) {
+                self.handle_customizer_click(x, y);
+                return;
+            }
+            return;
+        }
+
+        // Neither modal is open:
+        if is_right_button(button) {
+            // Check if outer sub-ring slice is hovered (e.g. FileJump target)
+            if self.menu.active_sub_tier == Some(SubTierType::FileJump) && self.menu.outer_hovered_index >= 0 {
+                let sub_idx = self.menu.outer_hovered_index as usize;
+                if sub_idx < self.menu.sub_slices.len() {
+                    let sub = &self.menu.sub_slices[sub_idx];
+                    let mut c = CustomizerState::new();
+                    if sub.is_add_button {
+                        c.open_file_add();
+                    } else if let Some(target_idx) = sub.target_index {
+                        c.open_file_edit(target_idx, &sub.label, sub.target_path.as_deref().unwrap_or(""), &sub.icon);
+                    }
+                    self.customizer = Some(c);
+                    self.seat_handler.customizer_open = true;
+                    self.dirty = true;
+                    return;
+                }
+            } else if self.menu.hovered_index >= 0 && (self.menu.hovered_index as usize) < self.menu.current_slices.len() {
+                // Right click on main ring slice -> open SliceSwap
+                let slot_idx = self.menu.hovered_index as usize;
+                let mut c = CustomizerState::new();
+                c.open_slice_swap(slot_idx);
+                c.selected_item = Some(self.menu.current_slices[slot_idx].id.clone());
+                self.customizer = Some(c);
+                self.seat_handler.customizer_open = true;
+                self.dirty = true;
+                return;
+            } else {
+                // Right click in empty space / center hub -> close dial
+                self.menu.transition_close_animated(None);
+                self.dirty = true;
+                return;
+            }
+        }
+
+        // Standard left-click on radial dial
+        if let Some(action) = self.seat_handler.handle_pointer_button(
+            &mut self.menu,
+            button,
+            ButtonState::Pressed,
+        ) {
+            self.menu.transition_close_animated(Some(action));
+        }
+    }
+
+    fn handle_pointer_release(&mut self, button: u32) {
+        if self.customizer.is_some() || self.folder_browser.is_some() {
+            return;
+        }
+        if let Some(action) = self.seat_handler.handle_pointer_button(
+            &mut self.menu,
+            button,
+            ButtonState::Released,
+        ) {
+            self.menu.transition_close_animated(Some(action));
+        }
+    }
+
+    fn handle_pointer_axis(&mut self, delta: f64) {
+        if let Some(customizer) = &mut self.customizer {
+            if customizer.mode.is_swap() {
+                let catalogue = state::actions::function_catalogue();
+                let items = customizer.filtered_catalogue(&catalogue);
+                let max_scroll = (items.len() as f32 * 56.0 - 368.0).max(0.0);
+                customizer.scroll_offset = (customizer.scroll_offset + delta as f32 * 2.0).clamp(0.0, max_scroll);
+                self.dirty = true;
+                return;
+            }
+        }
+        if let Some(folder_browser) = &mut self.folder_browser {
+            folder_browser.scroll_offset = (folder_browser.scroll_offset + delta as f32 * 2.0).max(0.0);
+            self.dirty = true;
+            return;
+        }
+        if let Some(action) = self.seat_handler.handle_pointer_axis(&mut self.menu, delta) {
+            execute_action(&action);
+        }
+    }
+
+    fn handle_customizer_click(&mut self, x: f32, y: f32) {
+        let (w, h) = if let Some(surf) = &self.surface {
+            (surf.width.max(544) as f32, surf.height.max(544) as f32)
+        } else {
+            (1920.0, 1080.0)
+        };
+
+        let card_w = renderer::customizer::CARD_W.min(w);
+        let card_h = renderer::customizer::CARD_H.min(h);
+        let card_x = ((w - card_w) / 2.0).max(0.0);
+        let card_y = ((h - card_h) / 2.0).max(0.0);
+
+        // 1. Outside card -> close customizer
+        if x < card_x || x > card_x + card_w || y < card_y || y > card_y + card_h {
+            self.customizer = None;
+            self.seat_handler.customizer_open = false;
+            self.dirty = true;
+            return;
+        }
+
+        let content_x = card_x + 18.0;
+        let content_w = card_w - 36.0;
+
+        // 2. Top-right close button (32x32)
+        let close_size = 32.0;
+        let close_x = content_x + content_w - close_size;
+        let close_y = card_y + 19.0;
+        if x >= close_x && x <= close_x + close_size && y >= close_y && y <= close_y + close_size {
+            self.customizer = None;
+            self.seat_handler.customizer_open = false;
+            self.dirty = true;
+            return;
+        }
+
+        let mode = match &self.customizer {
+            Some(c) => c.mode.clone(),
+            None => return,
+        };
+
+        match mode {
+            CustomizerMode::SliceSwap { slot_index } => {
+                // Category tabs (y: card_y + 64.0 .. card_y + 92.0)
+                let tabs_y = card_y + 64.0;
+                let tab_h = 28.0;
+                let tab_gap = 6.0;
+                let num_tabs = renderer::customizer::CATEGORIES.len() as f32;
+                let tab_w = (content_w - (num_tabs - 1.0) * tab_gap) / num_tabs;
+
+                if y >= tabs_y && y <= tabs_y + tab_h {
+                    for (i, cat) in renderer::customizer::CATEGORIES.iter().enumerate() {
+                        let tx = content_x + i as f32 * (tab_w + tab_gap);
+                        if x >= tx && x <= tx + tab_w {
+                            if let Some(c) = &mut self.customizer {
+                                c.active_category = cat.to_string();
+                                c.scroll_offset = 0.0;
+                            }
+                            self.dirty = true;
+                            return;
+                        }
+                    }
+                }
+
+                // Search clear icon (y: card_y + 100.0 .. card_y + 134.0)
+                let search_y = card_y + 100.0;
+                let search_h = 34.0;
+                if y >= search_y && y <= search_y + search_h {
+                    if let Some(c) = &mut self.customizer {
+                        if !c.search_query.is_empty() && x >= content_x + content_w - 32.0 {
+                            c.search_query.clear();
+                            c.scroll_offset = 0.0;
+                            self.dirty = true;
+                            return;
+                        }
+                    }
+                }
+
+                // Action list items (y: card_y + 142.0 .. card_y + 510.0)
+                let list_y = card_y + 142.0;
+                let list_h = 368.0;
+                if y >= list_y && y <= list_y + list_h && x >= content_x && x <= content_x + content_w {
+                    let item_h = 50.0;
+                    let item_gap = 6.0;
+                    let step = item_h + item_gap;
+                    let scroll_offset = self.customizer.as_ref().map(|c| c.scroll_offset).unwrap_or(0.0);
+                    let rel_y = y - (list_y - scroll_offset);
+                    if rel_y >= 0.0 {
+                        let idx = (rel_y / step) as usize;
+                        let offset_in_item = rel_y % step;
+                        if offset_in_item <= item_h {
+                            let catalogue = state::actions::function_catalogue();
+                            let items = if let Some(c) = &self.customizer {
+                                c.filtered_catalogue(&catalogue)
+                            } else {
+                                Vec::new()
+                            };
+                            if idx < items.len() {
+                                let item = items[idx];
+                                let is_selected = self.customizer.as_ref()
+                                    .and_then(|c| c.selected_item.as_deref()) == Some(item.id);
+                                let btn_w = 64.0;
+                                let btn_x = content_x + content_w - btn_w - 10.0;
+                                let clicked_btn = x >= btn_x && x <= btn_x + btn_w;
+
+                                if is_selected && clicked_btn {
+                                    self.menu.config.remove_slice(&self.menu.context.to_string(), item.id);
+                                } else {
+                                    self.menu.config.swap_slice(&self.menu.context.to_string(), slot_index, item.id);
+                                }
+                                let _ = self.menu.config.save();
+                                self.menu.refresh_current_slices();
+                                self.customizer = None;
+                                self.seat_handler.customizer_open = false;
+                                self.dirty = true;
+                                return;
+                            }
+                        }
+                    }
+                }
+
+                // Reset to Defaults button (footer_y: card_y + 518.0 .. card_y + 546.0)
+                let footer_y = card_y + 518.0;
+                let reset_btn_w = 145.0;
+                let reset_btn_h = 28.0;
+                if x >= content_x && x <= content_x + reset_btn_w && y >= footer_y && y <= footer_y + reset_btn_h {
+                    self.menu.config.reset_context(&self.menu.context.to_string());
+                    let _ = self.menu.config.save();
+                    self.menu.refresh_current_slices();
+                    self.customizer = None;
+                    self.seat_handler.customizer_open = false;
+                    self.dirty = true;
+                    return;
+                }
+            }
+
+            CustomizerMode::FileTargetEdit { .. } | CustomizerMode::FileTargetAdd => {
+                let is_edit = mode.is_file_edit();
+                let target_index_opt = if let CustomizerMode::FileTargetEdit { target_index } = mode {
+                    Some(target_index)
+                } else {
+                    None
+                };
+
+                // Field 0: Display Name box (y: card_y + 84.0 .. card_y + 122.0)
+                let label_box_y = card_y + 84.0;
+                let label_box_h = 38.0;
+                if y >= label_box_y && y <= label_box_y + label_box_h && x >= content_x && x <= content_x + content_w {
+                    if let Some(c) = &mut self.customizer {
+                        c.focused_field = 0;
+                    }
+                    self.dirty = true;
+                    return;
+                }
+
+                // Field 1: Path box & Browse button (y: card_y + 154.0 .. card_y + 192.0)
+                let path_box_y = card_y + 154.0;
+                let path_box_h = 38.0;
+                let browse_w = 90.0;
+                let path_box_w = content_w - browse_w - 8.0;
+
+                if y >= path_box_y && y <= path_box_y + path_box_h {
+                    if x >= content_x && x <= content_x + path_box_w {
+                        if let Some(c) = &mut self.customizer {
+                            c.focused_field = 1;
+                        }
+                        self.dirty = true;
+                        return;
+                    } else if x >= content_x + path_box_w + 8.0 && x <= content_x + content_w {
+                        // Browse button clicked! Open folder browser modal
+                        let mut fb = FolderBrowserState::new();
+                        let start_path = if let Some(c) = &self.customizer {
+                            if c.input_path.is_empty() {
+                                shellexpand::tilde("~").to_string()
+                            } else {
+                                shellexpand::tilde(&c.input_path).to_string()
+                            }
+                        } else {
+                            shellexpand::tilde("~").to_string()
+                        };
+                        let listing = crate::ipc::folder::list_dir_sync(&start_path);
+                        fb.set_listing(listing);
+                        fb.open(&start_path);
+                        self.folder_browser = Some(fb);
+                        self.dirty = true;
+                        return;
+                    }
+                }
+
+                // Icon picker grid (y: card_y + 226.0 .. card_y + 302.0, 2 rows of 8 icons)
+                let grid_y = card_y + 226.0;
+                let cols = 8;
+                let gap_x = 8.0;
+                let gap_y = 8.0;
+                let icon_w = (content_w - (cols as f32 - 1.0) * gap_x) / cols as f32;
+                let icon_h = 38.0;
+
+                if y >= grid_y && y <= grid_y + 2.0 * (icon_h + gap_y) && x >= content_x && x <= content_x + content_w {
+                    let col = ((x - content_x) / (icon_w + gap_x)).floor() as usize;
+                    let row = ((y - grid_y) / (icon_h + gap_y)).floor() as usize;
+                    let idx = row * cols + col;
+                    if idx < renderer::customizer::AVAILABLE_ICONS.len() {
+                        if let Some(c) = &mut self.customizer {
+                            c.input_icon = renderer::customizer::AVAILABLE_ICONS[idx].to_string();
+                        }
+                        self.dirty = true;
+                        return;
+                    }
+                }
+
+                // Action buttons row (y: card_y + 505.0 .. card_y + 543.0)
+                let btns_y = card_y + 505.0;
+                let btns_h = 38.0;
+                if y >= btns_y && y <= btns_y + btns_h {
+                    // Delete button (visible only in Edit mode, width 90.0)
+                    if is_edit {
+                        let del_w = 90.0;
+                        if x >= content_x && x <= content_x + del_w {
+                            if let Some(t_idx) = target_index_opt {
+                                self.menu.config.remove_file_jump_target(t_idx);
+                                let _ = self.menu.config.save();
+                                self.menu.refresh_sub_slices();
+                                self.customizer = None;
+                                self.seat_handler.customizer_open = false;
+                                self.dirty = true;
+                                return;
+                            }
+                        }
+                    }
+
+                    // Save and Cancel buttons on the right
+                    let cancel_w = 80.0;
+                    let save_w = 110.0;
+                    let save_x = content_x + content_w - save_w;
+                    let cancel_x = save_x - cancel_w - 8.0;
+
+                    // Cancel
+                    if x >= cancel_x && x <= cancel_x + cancel_w {
+                        self.customizer = None;
+                        self.seat_handler.customizer_open = false;
+                        self.dirty = true;
+                        return;
+                    }
+
+                    // Save
+                    if x >= save_x && x <= save_x + save_w {
+                        if let Some(c) = &self.customizer {
+                            let label = c.input_label.trim().to_string();
+                            let path = c.input_path.trim().to_string();
+                            let icon = c.input_icon.clone();
+                            if !label.is_empty() && !path.is_empty() {
+                                if let Some(t_idx) = target_index_opt {
+                                    self.menu.config.update_file_jump_target(t_idx, &label, &path, &icon);
+                                } else {
+                                    self.menu.config.add_file_jump_target(&label, &path, &icon);
+                                }
+                                let _ = self.menu.config.save();
+                                self.menu.refresh_sub_slices();
+                                self.customizer = None;
+                                self.seat_handler.customizer_open = false;
+                                self.dirty = true;
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn handle_folder_browser_click(&mut self, x: f32, y: f32) {
+        let (w, h) = if let Some(surf) = &self.surface {
+            (surf.width.max(544) as f32, surf.height.max(544) as f32)
+        } else {
+            (1920.0, 1080.0)
+        };
+
+        let card_w = 480.0_f32.min(w - 32.0);
+        let card_h = 540.0_f32.min(h - 32.0);
+        let card_x = (w - card_w) / 2.0;
+        let card_y = (h - card_h) / 2.0;
+        let margin = 18.0;
+
+        // Outside card -> close
+        if x < card_x || x > card_x + card_w || y < card_y || y > card_y + card_h {
+            self.folder_browser = None;
+            self.dirty = true;
+            return;
+        }
+
+        // Close button (top-right)
+        let close_size = 32.0;
+        let close_x = card_x + card_w - margin - close_size;
+        let close_y = card_y + 18.0;
+        if x >= close_x && x <= close_x + close_size && y >= close_y && y <= close_y + close_size {
+            self.folder_browser = None;
+            self.dirty = true;
+            return;
+        }
+
+        // Up / Back button
+        let back_btn_x = card_x + margin;
+        let back_btn_y = card_y + 16.0;
+        let back_btn_size = 36.0;
+        if x >= back_btn_x && x <= back_btn_x + back_btn_size && y >= back_btn_y && y <= back_btn_y + back_btn_size {
+            if let Some(fb) = &mut self.folder_browser {
+                if let Some(listing) = &fb.listing {
+                    let parent = listing.parent.clone();
+                    if !parent.is_empty() && parent != fb.current_path {
+                        let l = crate::ipc::folder::list_dir_sync(&parent);
+                        fb.set_listing(l);
+                        self.dirty = true;
+                        return;
+                    }
+                }
+            }
+        }
+
+        // Bottom Action buttons (y: card_y + 482.0 .. card_y + 520.0)
+        let btns_y = card_y + 482.0;
+        let btns_h = 38.0;
+        if y >= btns_y && y <= btns_y + btns_h {
+            let select_w = 100.0;
+            let select_x = card_x + card_w - margin - select_w;
+            let cancel_w = 80.0;
+            let cancel_x = select_x - 8.0 - cancel_w;
+
+            // Cancel
+            if x >= cancel_x && x <= cancel_x + cancel_w {
+                self.folder_browser = None;
+                self.dirty = true;
+                return;
+            }
+
+            // Select
+            if x >= select_x && x <= select_x + select_w {
+                let path = self.folder_browser.as_ref().map(|fb| fb.current_path.clone());
+                if let Some(p) = path {
+                    if let Some(c) = &mut self.customizer {
+                        c.input_path = p;
+                    }
+                }
+                self.folder_browser = None;
+                self.dirty = true;
+                return;
+            }
+        }
+
+        // Folder list items (y: card_y + 144.0 .. card_y + 472.0)
+        let list_y = card_y + 144.0;
+        let list_h = 328.0;
+        if y >= list_y && y <= list_y + list_h && x >= card_x + margin && x <= card_x + card_w - margin {
+            let item_step = 48.0;
+            let scroll_offset = self.folder_browser.as_ref().map(|fb| fb.scroll_offset).unwrap_or(0.0);
+            let rel_y = y - (list_y - scroll_offset);
+            if rel_y >= 0.0 {
+                let idx = (rel_y / item_step) as usize;
+                let clicked_folder = if let Some(fb) = &self.folder_browser {
+                    let folders = fb.filtered_folders();
+                    if idx < folders.len() {
+                        Some(folders[idx].path.clone())
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                if let Some(path) = clicked_folder {
+                    let l = crate::ipc::folder::list_dir_sync(&path);
+                    if let Some(fb) = &mut self.folder_browser {
+                        fb.set_listing(l);
+                        self.dirty = true;
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
+    fn handle_customizer_or_folder_key(&mut self, keysym: u32) -> bool {
+        if self.folder_browser.is_some() {
+            if is_escape(keysym) {
+                self.folder_browser = None;
+                self.dirty = true;
+                return true;
+            }
+            return true;
+        }
+
+        if let Some(customizer) = &mut self.customizer {
+            // 1. Escape: close customizer modal
+            if is_escape(keysym) {
+                self.customizer = None;
+                self.seat_handler.customizer_open = false;
+                self.dirty = true;
+                return true;
+            }
+
+            // 2. Tab: toggle focus between fields in file target mode
+            if keysym == 0xff09 || keysym == 9 {
+                if customizer.mode.is_file_edit() || customizer.mode.is_file_add() {
+                    customizer.focused_field = (customizer.focused_field + 1) % 2;
+                    self.dirty = true;
+                    return true;
+                }
+            }
+
+            // 3. Backspace: delete character
+            if keysym == 0xff08 || keysym == 8 {
+                if customizer.mode.is_swap() {
+                    customizer.search_query.pop();
+                    customizer.scroll_offset = 0.0;
+                } else if customizer.focused_field == 0 {
+                    customizer.input_label.pop();
+                } else {
+                    customizer.input_path.pop();
+                }
+                self.dirty = true;
+                return true;
+            }
+
+            // 4. Enter / Return: Save in file target edit/add mode
+            if keysym == 0xff0d || keysym == 13 {
+                if customizer.mode.is_file_edit() || customizer.mode.is_file_add() {
+                    let label = customizer.input_label.trim().to_string();
+                    let path = customizer.input_path.trim().to_string();
+                    let icon = customizer.input_icon.clone();
+                    if !label.is_empty() && !path.is_empty() {
+                        match customizer.mode {
+                            CustomizerMode::FileTargetEdit { target_index } => {
+                                self.menu.config.update_file_jump_target(target_index, &label, &path, &icon);
+                            }
+                            CustomizerMode::FileTargetAdd => {
+                                self.menu.config.add_file_jump_target(&label, &path, &icon);
+                            }
+                            _ => {}
+                        }
+                        let _ = self.menu.config.save();
+                        if self.menu.active_sub_tier == Some(SubTierType::FileJump) {
+                            self.menu.refresh_sub_slices();
+                        }
+                        self.customizer = None;
+                        self.seat_handler.customizer_open = false;
+                        self.dirty = true;
+                        return true;
+                    }
+                }
+            }
+
+            // 5. Printable characters
+            if let Some(ch) = keysym_to_char(keysym) {
+                if !ch.is_control() {
+                    if customizer.mode.is_swap() {
+                        customizer.search_query.push(ch);
+                        customizer.scroll_offset = 0.0;
+                    } else if customizer.focused_field == 0 {
+                        customizer.input_label.push(ch);
+                    } else {
+                        customizer.input_path.push(ch);
+                    }
+                    self.dirty = true;
+                    return true;
+                }
+            }
+
+            return true;
+        }
+
+        false
+    }
+
     /// Open or map radial surface and transition to Opening phase
     pub fn open_menu(&mut self, ctx: HyprContext, qh: &QueueHandle<Self>) -> Result<()> {
+        self.menu.config.reload_system_colors();
+        self.customizer = None;
+        self.folder_browser = None;
+        self.seat_handler.customizer_open = false;
+
         if self.surface.is_none() {
             let surface = RadialSurface::new(
                 &self.layer_shell,
@@ -666,6 +1250,15 @@ impl App {
         // 5. Draw Customizer modal if active
         if let Some(customizer_state) = &self.customizer {
             let cat = state::actions::function_catalogue();
+            let surface_hex = self.menu.config.colors.as_ref().map(|c| c.surface_hex()).unwrap_or("#141313");
+            let subtext_hex = self.menu.config.colors.as_ref().map(|c| c.subtext_hex()).unwrap_or("#948f94");
+            let customizer_colors = CustomizerColors {
+                primary: primary_col,
+                on_primary: on_primary_col,
+                on_surface: parse_hex_color("#e3e2e2"),
+                subtext: parse_hex_color(subtext_hex),
+                card_bg: parse_hex_color(surface_hex),
+            };
             renderer::customizer::render_customizer_with_font(
                 customizer_state,
                 &cat,
@@ -673,6 +1266,7 @@ impl App {
                 w as f32,
                 h as f32,
                 &mut self.font_renderer,
+                customizer_colors,
             );
         }
 

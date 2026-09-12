@@ -135,6 +135,7 @@ mod tests {
                 profile: profile.map(String::from),
             }),
             colors: None,
+            has_explicit_colors: false,
         }
     }
 

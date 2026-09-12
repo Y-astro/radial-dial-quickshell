@@ -138,7 +138,7 @@ impl RadialSurface {
             qh,
             surface.clone(),
             Layer::Overlay,
-            Some("quickshell:radialMenu"),
+            Some("radial-dial"),
             None, // output: let compositor choose
         );
 

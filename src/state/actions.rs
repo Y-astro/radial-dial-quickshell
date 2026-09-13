@@ -47,6 +47,7 @@ pub enum ActionId {
     // Context: Terminal
     KittyNewWindow,
     KittyAgy,
+    LaunchAgyTerminal,
     KittyClear,
     KittyDolphin,
     // Context: Browser
@@ -111,6 +112,7 @@ impl ActionId {
             "nightlight" | "night_light" => Some(ActionId::NightLight),
             "kitty_new_window" => Some(ActionId::KittyNewWindow),
             "kitty_agy" => Some(ActionId::KittyAgy),
+            "agy_terminal" | "kitty_launch_agy" | "launch_agy" => Some(ActionId::LaunchAgyTerminal),
             "kitty_clear" => Some(ActionId::KittyClear),
             "kitty_dolphin" => Some(ActionId::KittyDolphin),
             "browsertabs" | "browser_tabs" => Some(ActionId::BrowserTabs),
@@ -620,6 +622,15 @@ pub fn function_catalogue() -> Vec<ActionDef> {
             sub_tier_type: None,
         },
         ActionDef {
+            id: "agy_terminal",
+            label: "Agy Terminal",
+            icon: "robot_2",
+            category: "Tools",
+            desc: "Open Kitty terminal running agy --dangerously-skip-permissions",
+            has_sub_tier: false,
+            sub_tier_type: None,
+        },
+        ActionDef {
             id: "kitty_clear",
             label: "Clear Terminal",
             icon: "mop",
@@ -784,6 +795,7 @@ pub fn get_command(action: &ActionId) -> Option<String> {
         ActionId::BrowserReopenTab => Some("wtype -M ctrl -M shift -k t -m shift -m ctrl &".into()),
         ActionId::KittyNewWindow => Some("kitty || alacritty || foot &".into()),
         ActionId::KittyAgy => Some("sleep 0.05 && wtype 'agy --dangerously-skip-permissions' -k Return".into()),
+        ActionId::LaunchAgyTerminal => Some("kitty agy --dangerously-skip-permissions &".into()),
         ActionId::KittyClear => Some("sleep 0.05 && wtype -M ctrl -k l -m ctrl".into()),
         ActionId::KittyDolphin => Some("PID=0; TARGET_PID=\"$PID\"; while true; do NEXT_PID=$(pgrep -P \"$TARGET_PID\" 2>/dev/null | tail -n 1); if [ -n \"$NEXT_PID\" ] && [ -d \"/proc/$NEXT_PID/cwd\" ]; then TARGET_PID=\"$NEXT_PID\"; else break; fi; done; CWD=$(readlink -f \"/proc/$TARGET_PID/cwd\" 2>/dev/null || echo \"$HOME\"); (dolphin \"$CWD\" || xdg-open \"$CWD\" || nautilus \"$CWD\" || thunar \"$CWD\") &".into()),
         ActionId::FocusWindow { address, workspace } => {
@@ -1079,6 +1091,7 @@ mod tests {
         assert_eq!(ActionId::from_id("nightlight"), Some(ActionId::NightLight));
         assert_eq!(ActionId::from_id("kitty_new_window"), Some(ActionId::KittyNewWindow));
         assert_eq!(ActionId::from_id("kitty_agy"), Some(ActionId::KittyAgy));
+        assert_eq!(ActionId::from_id("agy_terminal"), Some(ActionId::LaunchAgyTerminal));
         assert_eq!(ActionId::from_id("kitty_clear"), Some(ActionId::KittyClear));
         assert_eq!(ActionId::from_id("kitty_dolphin"), Some(ActionId::KittyDolphin));
         assert_eq!(ActionId::from_id("browsertabs"), Some(ActionId::BrowserTabs));
@@ -1138,6 +1151,7 @@ mod tests {
         assert!(get_command(&ActionId::BrowserReopenTab).is_some());
         assert!(get_command(&ActionId::KittyNewWindow).is_some());
         assert!(get_command(&ActionId::KittyAgy).is_some());
+        assert!(get_command(&ActionId::LaunchAgyTerminal).is_some());
         assert!(get_command(&ActionId::KittyClear).is_some());
         assert!(get_command(&ActionId::KittyDolphin).is_some());
         assert!(get_command(&ActionId::Scratchpad).is_some());

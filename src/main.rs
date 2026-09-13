@@ -1314,7 +1314,9 @@ impl App {
 
     /// Open or map radial surface and transition to Opening phase
     pub fn open_menu(&mut self, ctx: HyprContext, qh: &QueueHandle<Self>) -> Result<()> {
-        self.menu.config.reload_system_colors();
+        if self.menu.config.reload_system_colors() {
+            self.dirty = true;
+        }
         self.customizer = None;
         self.folder_browser = None;
         self.seat_handler.customizer_open = false;
@@ -1399,9 +1401,15 @@ impl App {
 
         let primary_hex = self.menu.config.colors.as_ref().map(|c| c.primary_hex()).unwrap_or("#cbc4cb");
         let on_primary_hex = self.menu.config.colors.as_ref().map(|c| c.on_primary_hex()).unwrap_or("#322f34");
+        let surface_hex = self.menu.config.colors.as_ref().map(|c| c.surface_hex()).unwrap_or("#141313");
+        let subtext_hex = self.menu.config.colors.as_ref().map(|c| c.subtext_hex()).unwrap_or("#948f94");
+        let on_surface_hex = self.menu.config.colors.as_ref().map(|c| c.on_surface_hex()).unwrap_or("#e3e2e2");
 
         let primary_col = parse_hex_color(primary_hex);
         let on_primary_col = parse_hex_color(on_primary_hex);
+        let surface_col = parse_hex_color(surface_hex);
+        let subtext_col = parse_hex_color(subtext_hex);
+        let on_surface_col = parse_hex_color(on_surface_hex);
 
         let slice_count = self.menu.current_slices.len();
         if slice_count == 0 {
@@ -1459,17 +1467,36 @@ impl App {
                     let stroke = Stroke { width: 1.6, ..Default::default() };
                     pixmap.stroke_path(&path, &stroke_paint, &stroke, SkTransform::identity(), None);
                 } else {
-                    // Neutral frosted charcoal gradient matching QML:
-                    // Inner: (0.07, 0.07, 0.08, 0.44), Outer: (0.04, 0.04, 0.05, 0.34)
+                    // Neutral frosted glass gradient softly harmonized with system surface colors:
                     let (stop0, stop1) = if self.menu.is_low_end_gpu {
                         (
-                            Color::from_rgba(0.10, 0.10, 0.12, 0.88).unwrap_or(Color::BLACK),
-                            Color::from_rgba(0.06, 0.06, 0.08, 0.82).unwrap_or(Color::BLACK),
+                            Color::from_rgba(
+                                (surface_col.red() * 1.2).clamp(0.08, 0.25),
+                                (surface_col.green() * 1.2).clamp(0.08, 0.25),
+                                (surface_col.blue() * 1.2).clamp(0.08, 0.25),
+                                0.88,
+                            ).unwrap_or(Color::BLACK),
+                            Color::from_rgba(
+                                (surface_col.red() * 0.8).clamp(0.05, 0.20),
+                                (surface_col.green() * 0.8).clamp(0.05, 0.20),
+                                (surface_col.blue() * 0.8).clamp(0.05, 0.20),
+                                0.82,
+                            ).unwrap_or(Color::BLACK),
                         )
                     } else {
                         (
-                            Color::from_rgba(0.07, 0.07, 0.08, 0.44).unwrap_or(Color::BLACK),
-                            Color::from_rgba(0.04, 0.04, 0.05, 0.34).unwrap_or(Color::BLACK),
+                            Color::from_rgba(
+                                (surface_col.red() * 1.3).clamp(0.06, 0.22),
+                                (surface_col.green() * 1.3).clamp(0.06, 0.22),
+                                (surface_col.blue() * 1.3).clamp(0.07, 0.25),
+                                0.44,
+                            ).unwrap_or(Color::BLACK),
+                            Color::from_rgba(
+                                (surface_col.red() * 0.9).clamp(0.03, 0.18),
+                                (surface_col.green() * 0.9).clamp(0.03, 0.18),
+                                (surface_col.blue() * 0.9).clamp(0.04, 0.20),
+                                0.34,
+                            ).unwrap_or(Color::BLACK),
                         )
                     };
 
@@ -1585,15 +1612,13 @@ impl App {
         }
 
         // 5. Draw Folder Browser modal or Customizer modal if active
-        let surface_hex = self.menu.config.colors.as_ref().map(|c| c.surface_hex()).unwrap_or("#141313");
-        let subtext_hex = self.menu.config.colors.as_ref().map(|c| c.subtext_hex()).unwrap_or("#948f94");
         let customizer_colors = CustomizerColors {
             primary: primary_col,
             on_primary: on_primary_col,
-            on_surface: parse_hex_color("#e3e2e2"),
-            subtext: parse_hex_color(subtext_hex),
-            card_bg: parse_hex_color(surface_hex),
-            surface_base: parse_hex_color(surface_hex),
+            on_surface: on_surface_col,
+            subtext: subtext_col,
+            card_bg: surface_col,
+            surface_base: surface_col,
         };
 
         if let Some(folder_state) = &self.folder_browser {
@@ -1908,6 +1933,42 @@ async fn main() -> Result<()> {
     let (tabs_tx, mut tabs_rx) = watch::channel(vec![]);
     tokio::spawn(ipc::tabs_shm::watch_tabs(tabs_tx));
 
+    // Start background system theme colors watcher
+    let (colors_tx, mut colors_rx) = tokio::sync::mpsc::unbounded_channel::<()>();
+    let _colors_watcher = {
+        use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
+        let watch_dir_str = shellexpand::tilde("~/.local/state/quickshell/user/generated").to_string();
+        let watch_dir = std::path::Path::new(&watch_dir_str);
+        if !watch_dir.exists() {
+            let _ = std::fs::create_dir_all(watch_dir);
+        }
+        let tx = colors_tx.clone();
+        match RecommendedWatcher::new(
+            move |res: notify::Result<notify::Event>| {
+                if let Ok(event) = res {
+                    let is_colors = event.paths.iter().any(|p| {
+                        p.file_name().and_then(|n| n.to_str()).map_or(false, |name| name == "colors.json")
+                    });
+                    if is_colors {
+                        let _ = tx.send(());
+                    }
+                }
+            },
+            Config::default(),
+        ) {
+            Ok(mut watcher) => {
+                if let Err(e) = watcher.watch(watch_dir, RecursiveMode::NonRecursive) {
+                    log::warn!("Failed to watch directory {} for theme colors: {e}", watch_dir.display());
+                }
+                Some(watcher)
+            }
+            Err(e) => {
+                log::warn!("Failed to create notify watcher for theme colors: {e}");
+                None
+            }
+        }
+    };
+
     // UNIX Domain Socket Listener for hotkey activation
     let _ = std::fs::remove_file(SOCKET_PATH);
     let listener = tokio::net::UnixListener::bind(SOCKET_PATH)?;
@@ -1971,6 +2032,14 @@ async fn main() -> Result<()> {
             _ = tabs_rx.changed() => {
                 app.menu.browser_tabs = tabs_rx.borrow().clone();
                 app.dirty = true;
+            }
+
+            // Real-time system theme colors reload from Matugen / switchwall
+            Some(_) = colors_rx.recv() => {
+                if app.menu.config.reload_system_colors() {
+                    log::info!("Live theme colors updated from system!");
+                    app.dirty = true;
+                }
             }
 
             // 125 FPS Frame Step and Render

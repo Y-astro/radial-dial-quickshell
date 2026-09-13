@@ -54,7 +54,7 @@ pub fn icon_codepoint(name: &str) -> char {
 
         // Terminal Context
         "open_in_new" | "launch" => '\u{e895}',
-        "robot_2" | "kitty_agy" | "robot" => '\u{f5d0}',
+        "robot_2" | "kitty_agy" | "agy_terminal" | "robot" => '\u{f5d0}',
         "mop" | "kitty_clear" => '\u{e28d}',
 
         // Browser Context

@@ -23,6 +23,10 @@ pub struct ColorsConfig {
     pub surface: Option<String>,    // hex e.g. "#e6e6ed"
     #[serde(default)]
     pub subtext: Option<String>,    // hex e.g. "#b2b2bf"
+    #[serde(alias = "onSurface", default)]
+    pub on_surface: Option<String>, // hex e.g. "#e3e2e2"
+    #[serde(alias = "surfaceContainer", default)]
+    pub surface_container: Option<String>, // hex e.g. "#1f2020"
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -48,10 +52,16 @@ pub struct RadialConfig {
     #[serde(default)]
     pub performance: Option<PerformanceConfig>,
 
-    #[serde(default)]
+    /// User-defined explicit override colors (if specified in config.json)
+    #[serde(rename = "customColors", alias = "custom_colors", default)]
+    pub custom_colors: Option<ColorsConfig>,
+
+    /// Active colors used by the renderer (runtime only; not serialized to avoid locking system themes)
+    #[serde(skip_serializing, default)]
     pub colors: Option<ColorsConfig>,
 
-    #[serde(default)]
+    /// Tracks whether custom colors explicitly override system colors
+    #[serde(rename = "hasExplicitColors", alias = "has_explicit_colors", default)]
     pub has_explicit_colors: bool,
 }
 
@@ -92,15 +102,19 @@ fn default_file_jump_targets() -> Vec<FileJumpTarget> {
 }
 
 impl ColorsConfig {
-    pub fn default_primary()    -> &'static str { "#cbc4cb" }
-    pub fn default_on_primary() -> &'static str { "#322f34" }
-    pub fn default_surface()    -> &'static str { "#141313" }
-    pub fn default_subtext()    -> &'static str { "#948f94" }
+    pub fn default_primary()           -> &'static str { "#cbc4cb" }
+    pub fn default_on_primary()        -> &'static str { "#322f34" }
+    pub fn default_surface()           -> &'static str { "#141313" }
+    pub fn default_subtext()           -> &'static str { "#948f94" }
+    pub fn default_on_surface()        -> &'static str { "#e3e2e2" }
+    pub fn default_surface_container() -> &'static str { "#1f2020" }
 
-    pub fn primary_hex(&self)    -> &str { self.primary.as_deref().unwrap_or(Self::default_primary()) }
-    pub fn on_primary_hex(&self) -> &str { self.on_primary.as_deref().unwrap_or(Self::default_on_primary()) }
-    pub fn surface_hex(&self)    -> &str { self.surface.as_deref().unwrap_or(Self::default_surface()) }
-    pub fn subtext_hex(&self)    -> &str { self.subtext.as_deref().unwrap_or(Self::default_subtext()) }
+    pub fn primary_hex(&self)           -> &str { self.primary.as_deref().unwrap_or(Self::default_primary()) }
+    pub fn on_primary_hex(&self)        -> &str { self.on_primary.as_deref().unwrap_or(Self::default_on_primary()) }
+    pub fn surface_hex(&self)           -> &str { self.surface.as_deref().unwrap_or(Self::default_surface()) }
+    pub fn subtext_hex(&self)           -> &str { self.subtext.as_deref().unwrap_or(Self::default_subtext()) }
+    pub fn on_surface_hex(&self)        -> &str { self.on_surface.as_deref().unwrap_or(Self::default_on_surface()) }
+    pub fn surface_container_hex(&self) -> &str { self.surface_container.as_deref().unwrap_or(Self::default_surface_container()) }
 }
 
 impl RadialConfig {
@@ -118,43 +132,92 @@ impl RadialConfig {
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default();
 
-        let has_explicit = cfg.colors.as_ref().and_then(|c| c.primary.as_ref()).is_some();
-        cfg.has_explicit_colors = has_explicit;
-
-        if !has_explicit {
-            if let Some(sys_colors) = Self::load_system_colors() {
-                cfg.colors = Some(sys_colors);
-            }
+        if let Some(custom) = &cfg.custom_colors {
+            cfg.has_explicit_colors = true;
+            cfg.colors = Some(custom.clone());
+        } else {
+            cfg.has_explicit_colors = false;
+            cfg.colors = Self::load_system_colors();
         }
 
         cfg
     }
 
-    /// Load dynamic system theme colors from generated colors.json or fallback Appearance.qml
+    /// Load dynamic system theme colors from generated colors.json or fallback Appearance.qml / gtk.css
     pub fn load_system_colors() -> Option<ColorsConfig> {
-        // 1. Primary source: ~/.local/state/quickshell/user/generated/colors.json (produced by switchwall / Matugen)
-        let json_path = shellexpand::tilde("~/.local/state/quickshell/user/generated/colors.json").to_string();
-        if let Ok(content) = std::fs::read_to_string(&json_path) {
-            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
-                let primary = val.get("primary").and_then(|v| v.as_str()).map(String::from);
-                let on_primary = val.get("on_primary").and_then(|v| v.as_str()).map(String::from);
-                let surface = val.get("surface").and_then(|v| v.as_str()).map(String::from);
-                let subtext = val.get("outline").and_then(|v| v.as_str())
-                    .or_else(|| val.get("on_surface_variant").and_then(|v| v.as_str()))
-                    .map(String::from);
+        // 1. Primary sources: Matugen generated colors.json
+        for json_path in &[
+            shellexpand::tilde("~/.local/state/quickshell/user/generated/colors.json").to_string(),
+            shellexpand::tilde("~/.cache/quickshell/user/generated/colors.json").to_string(),
+        ] {
+            if let Ok(content) = std::fs::read_to_string(json_path) {
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
+                    let primary = val.get("primary").and_then(|v| v.as_str()).map(String::from);
+                    let on_primary = val.get("on_primary").and_then(|v| v.as_str()).map(String::from);
+                    let surface = val.get("surface").and_then(|v| v.as_str()).map(String::from);
+                    let subtext = val.get("outline").and_then(|v| v.as_str())
+                        .or_else(|| val.get("on_surface_variant").and_then(|v| v.as_str()))
+                        .map(String::from);
+                    let on_surface = val.get("on_surface").and_then(|v| v.as_str()).map(String::from);
+                    let surface_container = val.get("surface_container").and_then(|v| v.as_str())
+                        .or_else(|| val.get("surface_container_high").and_then(|v| v.as_str()))
+                        .map(String::from);
+
+                    if primary.is_some() || on_primary.is_some() || surface.is_some() {
+                        return Some(ColorsConfig {
+                            primary,
+                            on_primary,
+                            surface,
+                            subtext,
+                            on_surface,
+                            surface_container,
+                        });
+                    }
+                }
+            }
+        }
+
+        // 2. Secondary fallback: GTK CSS (gtk-3.0 / gtk-4.0)
+        for css_path in &[
+            shellexpand::tilde("~/.config/gtk-3.0/gtk.css").to_string(),
+            shellexpand::tilde("~/.config/gtk-4.0/gtk.css").to_string(),
+        ] {
+            if let Ok(content) = std::fs::read_to_string(css_path) {
+                let mut primary = None;
+                let mut on_primary = None;
+                let mut surface = None;
+                let mut on_surface = None;
+                let mut surface_container = None;
+
+                for line in content.lines() {
+                    let line = line.trim();
+                    if let Some(rest) = line.strip_prefix("@define-color accent_color ") {
+                        primary = rest.strip_suffix(';').map(|s| s.trim().to_string());
+                    } else if let Some(rest) = line.strip_prefix("@define-color accent_fg_color ") {
+                        on_primary = rest.strip_suffix(';').map(|s| s.trim().to_string());
+                    } else if let Some(rest) = line.strip_prefix("@define-color window_bg_color ") {
+                        surface = rest.strip_suffix(';').map(|s| s.trim().to_string());
+                    } else if let Some(rest) = line.strip_prefix("@define-color window_fg_color ") {
+                        on_surface = rest.strip_suffix(';').map(|s| s.trim().to_string());
+                    } else if let Some(rest) = line.strip_prefix("@define-color card_bg_color ") {
+                        surface_container = rest.strip_suffix(';').map(|s| s.trim().to_string());
+                    }
+                }
 
                 if primary.is_some() || on_primary.is_some() || surface.is_some() {
                     return Some(ColorsConfig {
                         primary,
                         on_primary,
                         surface,
-                        subtext,
+                        subtext: None,
+                        on_surface,
+                        surface_container,
                     });
                 }
             }
         }
 
-        // 2. Secondary fallback: Appearance.qml
+        // 3. Tertiary fallback: Appearance.qml
         let mut detected_primary = None;
         let mut detected_on_primary = None;
         for qml_path in &[
@@ -190,6 +253,8 @@ impl RadialConfig {
                 on_primary: detected_on_primary,
                 surface: None,
                 subtext: None,
+                on_surface: None,
+                surface_container: None,
             });
         }
 
@@ -345,6 +410,7 @@ impl Default for RadialConfig {
             media_slices: default_media_slices(),
             file_jump_targets: default_file_jump_targets(),
             performance: None,
+            custom_colors: None,
             colors: None,
             has_explicit_colors: false,
         }
@@ -499,17 +565,42 @@ mod tests {
         assert_eq!(empty_colors.on_primary_hex(), "#322f34");
         assert_eq!(empty_colors.surface_hex(), "#141313");
         assert_eq!(empty_colors.subtext_hex(), "#948f94");
+        assert_eq!(empty_colors.on_surface_hex(), "#e3e2e2");
+        assert_eq!(empty_colors.surface_container_hex(), "#1f2020");
 
         let custom_colors = ColorsConfig {
             primary: Some("#ff0000".into()),
             on_primary: Some("#00ff00".into()),
             surface: Some("#0000ff".into()),
             subtext: Some("#ffff00".into()),
+            on_surface: Some("#ffffff".into()),
+            surface_container: Some("#112233".into()),
         };
         assert_eq!(custom_colors.primary_hex(), "#ff0000");
         assert_eq!(custom_colors.on_primary_hex(), "#00ff00");
         assert_eq!(custom_colors.surface_hex(), "#0000ff");
         assert_eq!(custom_colors.subtext_hex(), "#ffff00");
+        assert_eq!(custom_colors.on_surface_hex(), "#ffffff");
+        assert_eq!(custom_colors.surface_container_hex(), "#112233");
+    }
+
+    #[test]
+    fn test_system_colors_dynamic_reload() {
+        let mut cfg = RadialConfig::default();
+        assert!(!cfg.has_explicit_colors);
+
+        // System colors should be reloaded when available
+        let _ = cfg.reload_system_colors();
+
+        // If custom colors are set, has_explicit_colors is true and reload is skipped
+        cfg.custom_colors = Some(ColorsConfig {
+            primary: Some("#123456".into()),
+            ..Default::default()
+        });
+        cfg.has_explicit_colors = true;
+        cfg.colors = cfg.custom_colors.clone();
+        assert!(!cfg.reload_system_colors());
+        assert_eq!(cfg.colors.as_ref().unwrap().primary_hex(), "#123456");
     }
 
     #[test]

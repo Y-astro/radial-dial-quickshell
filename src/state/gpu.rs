@@ -134,6 +134,7 @@ mod tests {
             performance: Some(PerformanceConfig {
                 profile: profile.map(String::from),
             }),
+            custom_colors: None,
             colors: None,
             has_explicit_colors: false,
         }

@@ -50,6 +50,7 @@ pub struct MenuState {
     pub flick_open_time: std::time::Instant,
     pub anim: AnimState,
     pub is_low_end_gpu: bool,
+    pub is_special_workspace: bool,
     pub config: RadialConfig,
 }
 
@@ -121,6 +122,7 @@ impl MenuState {
             flick_open_time: std::time::Instant::now(),
             anim: AnimState::default(),
             is_low_end_gpu,
+            is_special_workspace: false,
             config,
         }
     }
@@ -167,10 +169,12 @@ impl MenuState {
         self.window_info = ctx.window;
         self.active_clients = ctx.clients;
 
-        let in_special = is_in_special_workspace(
-            self.window_info.workspace.id,
-            &self.window_info.workspace.name,
-        );
+        self.is_special_workspace = ctx.is_special_workspace
+            || is_in_special_workspace(
+                self.window_info.workspace.id,
+                &self.window_info.workspace.name,
+            );
+        let in_special = self.is_special_workspace;
         let slice_ids = self.config.get_active_slice_ids(&self.context.to_string());
         self.current_slices = slice_ids
             .iter()
@@ -215,6 +219,7 @@ impl MenuState {
         self.center_hovered = false;
         self.outer_hovered_index = -1;
         self.drag.reset();
+        self.is_special_workspace = false;
     }
 
     /// Open concentric sub-tier for the specified parent slice index
@@ -246,10 +251,11 @@ impl MenuState {
 
     /// Re-resolves and updates current slices from config for the active context
     pub fn refresh_current_slices(&mut self) {
-        let in_special = is_in_special_workspace(
-            self.window_info.workspace.id,
-            &self.window_info.workspace.name,
-        );
+        let in_special = self.is_special_workspace
+            || is_in_special_workspace(
+                self.window_info.workspace.id,
+                &self.window_info.workspace.name,
+            );
         let slice_ids = self.config.get_active_slice_ids(&self.context.to_string());
         self.current_slices = slice_ids
             .iter()
@@ -317,8 +323,8 @@ impl MenuState {
         None
     }
 
-    /// Dynamic active hover label for center hub text
-    pub fn active_hover_label(&self) -> String {
+    /// Dynamic active hover content (icon, label) for center hub text/icon
+    pub fn active_hover_hub_content(&self) -> (Option<String>, String) {
         // 1. Dragging slice
         if self.drag.is_dragging && self.drag.from_index >= 0 && self.drag.target_index >= 0 {
             let from_label = self
@@ -328,29 +334,38 @@ impl MenuState {
                 .unwrap_or("Slice");
 
             if self.drag.from_index == self.drag.target_index {
-                return format!("Moving {}", from_label);
+                return (None, format!("Moving {}", from_label));
             } else {
                 let slot = self.drag.target_index + 1;
-                return format!("Move {} → Slot {} (Key {})", from_label, slot, slot);
+                return (None, format!("Move {} → Slot {} (Key {})", from_label, slot, slot));
             }
         }
 
         // 2. Outer sub-ring hovered
         if self.outer_hovered_index >= 0 {
             if let Some(sub) = self.sub_slices.get(self.outer_hovered_index as usize) {
-                return sub.label.clone();
+                if self.active_sub_tier == Some(SubTierType::ActiveApps) {
+                    return (Some(sub.icon.clone()), sub.label.clone());
+                } else {
+                    return (None, sub.label.clone());
+                }
             }
         }
 
         // 3. Main ring hovered
         if self.hovered_index >= 0 {
             if let Some(slice) = self.current_slices.get(self.hovered_index as usize) {
-                return slice.label.clone();
+                return (None, slice.label.clone());
             }
         }
 
         // 4. Nothing hovered
-        String::new()
+        (None, String::new())
+    }
+
+    /// Dynamic active hover label for center hub text
+    pub fn active_hover_label(&self) -> String {
+        self.active_hover_hub_content().1
     }
 
     /// Reorder current slices in memory and update config
@@ -490,40 +505,23 @@ impl MenuState {
                     return vec![SliceItem::new("no_windows", "No Open Apps", "info", 0)];
                 }
 
-                // Count occurrences of each class
-                let mut class_counts = std::collections::HashMap::new();
-                for c in &valid_clients {
-                    let raw_class = if c.class.is_empty() { "App" } else { &c.class };
-                    let clean = raw_class.rsplit('.').next().unwrap_or(raw_class).to_lowercase();
-                    *class_counts.entry(clean).or_insert(0usize) += 1;
-                }
-
-                let mut class_seen = std::collections::HashMap::new();
                 valid_clients
                     .iter()
                     .enumerate()
                     .map(|(i, c)| {
                         let raw_class = if c.class.is_empty() { "App" } else { &c.class };
-                        let clean = raw_class.rsplit('.').next().unwrap_or(raw_class);
-                        let lower = clean.to_lowercase();
-                        let count = *class_counts.get(&lower).unwrap_or(&1);
 
-                        let seen = class_seen.entry(lower).or_insert(0usize);
-                        *seen += 1;
-
-                        let mut display_label = if let Some(first_char) = clean.chars().next() {
-                            let mut capitalized = first_char.to_uppercase().to_string();
-                            capitalized.push_str(&clean[first_char.len_utf8()..]);
-                            capitalized
+                        let ws_display = if c.workspace.name.starts_with("special") || c.workspace.id < 0 {
+                            "WS X".to_string()
+                        } else if !c.workspace.name.is_empty() {
+                            format!("WS {}", c.workspace.name)
+                        } else if c.workspace.id != 0 {
+                            format!("WS {}", c.workspace.id)
                         } else {
-                            "App".to_string()
+                            "WS ?".to_string()
                         };
 
-                        if count > 1 {
-                            display_label.push_str(&format!(" #{}", *seen));
-                        }
-
-                        let ws_name = if !c.workspace.name.is_empty() {
+                        let raw_ws = if !c.workspace.name.is_empty() {
                             c.workspace.name.clone()
                         } else if c.workspace.id != 0 {
                             c.workspace.id.to_string()
@@ -531,16 +529,12 @@ impl MenuState {
                             String::new()
                         };
 
-                        if !ws_name.is_empty() {
-                            display_label.push_str(&format!(" [WS {}]", ws_name));
-                        }
-
                         let icon = resolve_app_icon(raw_class);
                         let mut item =
-                            SliceItem::new(format!("app_{}", c.address), display_label, icon, i);
+                            SliceItem::new(format!("app_{}", c.address), ws_display, icon, i);
                         item.action = Some(ActionId::FocusWindow {
                             address: c.address.clone(),
-                            workspace: ws_name,
+                            workspace: raw_ws,
                         });
                         item
                     })
@@ -768,6 +762,13 @@ mod tests {
         menu.outer_hovered_index = 2;
         assert_eq!(menu.active_hover_label(), "Workspace 3");
 
+        // Active apps hovered returns icon and workspace label
+        menu.open_sub_tier(0, SubTierType::ActiveApps);
+        menu.sub_slices = vec![SliceItem::new("app_1", "WS X", "terminal", 0)];
+        menu.outer_hovered_index = 0;
+        assert_eq!(menu.active_hover_hub_content(), (Some("terminal".to_string()), "WS X".to_string()));
+        assert_eq!(menu.active_hover_label(), "WS X");
+
         // Dragging slice
         menu.drag.is_dragging = true;
         menu.drag.from_index = 1;
@@ -856,13 +857,26 @@ mod tests {
                 },
                 ..Default::default()
             },
+            HyprClient {
+                address: "0x3".into(),
+                class: "firefox".into(),
+                title: "Browser".into(),
+                pid: 103,
+                workspace: HyprWorkspace {
+                    id: -99,
+                    name: "special:special".into(),
+                },
+                ..Default::default()
+            },
         ];
 
         let subs = menu.generate_sub_slices(SubTierType::ActiveApps);
-        assert_eq!(subs.len(), 2);
-        assert!(subs[0].label.contains("Kitty #1"));
-        assert!(subs[0].label.contains("[WS 1]"));
-        assert!(subs[1].label.contains("Kitty #2"));
-        assert!(subs[1].label.contains("[WS 2]"));
+        assert_eq!(subs.len(), 3);
+        assert_eq!(subs[0].label, "WS 1");
+        assert_eq!(subs[0].icon, "terminal");
+        assert_eq!(subs[1].label, "WS 2");
+        assert_eq!(subs[1].icon, "terminal");
+        assert_eq!(subs[2].label, "WS X");
+        assert_eq!(subs[2].icon, "globe");
     }
 }

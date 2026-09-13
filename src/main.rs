@@ -1775,13 +1775,14 @@ impl App {
             }
 
             // 4. Draw Center Hub
-            let hub_label = self.menu.active_hover_label();
+            let (hub_icon, hub_label) = self.menu.active_hover_hub_content();
             draw_center_hub(
                 &mut self.font_renderer,
                 pixmap,
                 cx,
                 cy,
                 44.0,
+                hub_icon.as_deref(),
                 &hub_label,
                 self.menu.center_hovered,
                 self.menu.anim.hub_scale,

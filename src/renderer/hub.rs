@@ -21,6 +21,7 @@ pub fn draw_center_hub(
     cx: f32,
     cy: f32,
     radius: f32,
+    hover_icon: Option<&str>,
     hover_label: &str,
     is_hovered: bool,
     scale: f32,
@@ -38,10 +39,12 @@ pub fn draw_center_hub(
         return;
     }
 
+    let has_content = hover_icon.map(|s| !s.is_empty()).unwrap_or(false) || !hover_label.is_empty();
+
     // Background fill matching QML
     let fill_alpha = if is_hovered {
         0.22
-    } else if !hover_label.is_empty() {
+    } else if has_content {
         if is_low_end { 0.92 } else { 0.65 }
     } else if is_low_end {
         0.85
@@ -51,7 +54,7 @@ pub fn draw_center_hub(
 
     let fill_color = if is_hovered {
         Color::from_rgba(1.0, 1.0, 1.0, fill_alpha).unwrap_or(Color::WHITE)
-    } else if !hover_label.is_empty() {
+    } else if has_content {
         if is_low_end {
             Color::from_rgba(0.10, 0.11, 0.15, fill_alpha).unwrap_or(Color::BLACK)
         } else {
@@ -64,7 +67,7 @@ pub fn draw_center_hub(
     };
 
     // Border color & width matching QML
-    let (border_color, border_width) = if !hover_label.is_empty() {
+    let (border_color, border_width) = if has_content {
         let light = lighten_color(primary_col, 1.25);
         let eff_a = (light.alpha() * scale).clamp(0.0, 1.0);
         let col = Color::from_rgba(light.red(), light.green(), light.blue(), eff_a).unwrap_or(light);
@@ -94,7 +97,23 @@ pub fn draw_center_hub(
     }
 
     // Hub content
-    if hover_label.is_empty() {
+    if let Some(icon) = hover_icon.filter(|s| !s.is_empty()) {
+        let eff_a = (primary_col.alpha() * scale).clamp(0.0, 1.0);
+        let text_color = Color::from_rgba(primary_col.red(), primary_col.green(), primary_col.blue(), eff_a).unwrap_or(primary_col);
+        if !hover_label.is_empty() {
+            // App icon above, workspace text below
+            let icon_size = 26.0 * scale;
+            let icon_color = Color::from_rgba(1.0, 1.0, 1.0, (245.0 / 255.0) * scale).unwrap_or(Color::WHITE);
+            draw_icon(font_renderer, pixmap, icon, cx, cy - 8.0 * scale, icon_size, icon_color);
+
+            let font_size = 11.5 * scale;
+            draw_text(font_renderer, pixmap, hover_label, cx, cy + 16.0 * scale, font_size, text_color);
+        } else {
+            let icon_size = 26.0 * scale;
+            let icon_color = Color::from_rgba(1.0, 1.0, 1.0, (245.0 / 255.0) * scale).unwrap_or(Color::WHITE);
+            draw_icon(font_renderer, pixmap, icon, cx, cy, icon_size, icon_color);
+        }
+    } else if hover_label.is_empty() {
         // 1. Close icon ("close" / '✕')
         let icon_size = (if is_hovered { 24.0 } else { 22.0 }) * scale;
         let icon_color = Color::from_rgba(1.0, 1.0, 1.0, 0.95 * scale).unwrap_or(Color::WHITE);
@@ -125,6 +144,7 @@ mod tests {
             100.0,
             100.0,
             44.0,
+            None,
             "",
             false,
             1.0,
@@ -143,6 +163,7 @@ mod tests {
             100.0,
             100.0,
             44.0,
+            None,
             "Terminal",
             true,
             1.0,
@@ -152,5 +173,24 @@ mod tests {
 
         let non_zero_label = pixmap_label.pixels().iter().filter(|p| p.alpha() > 0).count();
         assert!(non_zero_label > 500, "Center hub with label must render visible pixels");
+
+        // 3. Draw with hover icon + workspace text (Active Apps style)
+        let mut pixmap_app = Pixmap::new(200, 200).unwrap();
+        draw_center_hub(
+            &mut font_renderer,
+            &mut pixmap_app,
+            100.0,
+            100.0,
+            44.0,
+            Some("terminal"),
+            "WS X",
+            false,
+            1.0,
+            primary,
+            false,
+        );
+
+        let non_zero_app = pixmap_app.pixels().iter().filter(|p| p.alpha() > 0).count();
+        assert!(non_zero_app > 500, "Center hub with app icon and WS text must render visible pixels");
     }
 }

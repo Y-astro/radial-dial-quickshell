@@ -775,10 +775,10 @@ pub fn get_command(action: &ActionId) -> Option<String> {
         ActionId::ScreenshotArea => Some("grimblast --freeze copy area || hyprshot -m region --clipboard-only &".into()),
         ActionId::ScreenshotFull => Some("grimblast copy output || hyprshot -m output --clipboard-only &".into()),
         ActionId::ScreenRecord => Some("pkill -SIGINT wf-recorder || wf-recorder -g \"$(slurp)\" -f ~/Videos/recording_$(date +%s).mp4 &".into()),
-        ActionId::ToggleFloat => Some("hyprctl dispatch togglefloating".into()),
-        ActionId::ToggleFullscreen => Some("hyprctl dispatch fullscreen 1".into()),
-        ActionId::KillWindow => Some("hyprctl dispatch killactive".into()),
-        ActionId::PinWindow => Some("hyprctl dispatch pin".into()),
+        ActionId::ToggleFloat => Some("hyprctl dispatch 'hl.dsp.window.float()' 2>/dev/null || hyprctl dispatch togglefloating".into()),
+        ActionId::ToggleFullscreen => Some("hyprctl dispatch 'hl.dsp.window.fullscreen()' 2>/dev/null || hyprctl dispatch fullscreen 1".into()),
+        ActionId::KillWindow => Some("hyprctl dispatch 'hl.dsp.window.kill()' 2>/dev/null || hyprctl dispatch killactive".into()),
+        ActionId::PinWindow => Some("hyprctl dispatch 'hl.dsp.window.pin()' 2>/dev/null || hyprctl dispatch pin".into()),
         ActionId::Lock => Some("loginctl lock-session || hyprlock &".into()),
         ActionId::NightLight => Some("pkill gammastep || gammastep -O 4000 || hyprsunset &".into()),
         ActionId::Session => Some("hyprctl dispatch \"hl.dsp.global('quickshell:sessionToggle')\" &".into()),
@@ -816,7 +816,7 @@ pub fn get_command(action: &ActionId) -> Option<String> {
             ))
         }
         ActionId::MoveToWorkspace(n) => Some(format!(
-            "hyprctl dispatch \"hl.dsp.window.move({{ workspace = {} }})\" || hyprctl dispatch movetoworkspace {}",
+            "hyprctl dispatch \"hl.dsp.window.move({{ workspace = {} }})\" 2>/dev/null || hyprctl dispatch movetoworkspace {}",
             n, n
         )),
         ActionId::SwitchToTab(idx) => {
@@ -832,7 +832,7 @@ pub fn get_command(action: &ActionId) -> Option<String> {
             let exp = shellexpand::tilde(path).to_string();
             Some(format!("(dolphin \"{}\" || xdg-open \"{}\") &", exp, exp))
         },
-        ActionId::Scratchpad => Some("hyprctl dispatch \"hl.dsp.window.move({ workspace = 'special:special' })\" || hyprctl dispatch movetoworkspace special:special".into()),
+        ActionId::Scratchpad => Some("hyprctl dispatch \"hl.dsp.window.move({ workspace = 'special:special' })\" 2>/dev/null || hyprctl dispatch movetoworkspace special:special".into()),
         _ => None,
     }
 }
@@ -1169,7 +1169,7 @@ mod tests {
         let move_ws = ActionId::MoveToWorkspace(3);
         assert_eq!(
             get_command(&move_ws),
-            Some("hyprctl dispatch \"hl.dsp.window.move({ workspace = 3 })\" || hyprctl dispatch movetoworkspace 3".into())
+            Some("hyprctl dispatch \"hl.dsp.window.move({ workspace = 3 })\" 2>/dev/null || hyprctl dispatch movetoworkspace 3".into())
         );
 
         let tab3 = ActionId::SwitchToTab(3);

@@ -81,6 +81,8 @@ pub struct HyprMonitor {
     pub focused: bool,
     #[serde(rename = "activeWorkspace", default)]
     pub active_workspace: HyprWorkspace,
+    #[serde(rename = "specialWorkspace", default)]
+    pub special_workspace: HyprWorkspace,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Deserialize, serde::Serialize)]
@@ -91,6 +93,7 @@ pub struct HyprContext {
     pub clients: Vec<HyprClient>,
     pub monitors: Vec<HyprMonitor>,
     pub target_monitor_name: Option<String>,
+    pub is_special_workspace: bool,
 }
 
 /// Socket Discovery (port of hypr_ipc.py get_hypr_socket())
@@ -260,6 +263,7 @@ pub fn resolve_effective_window(
     active_window: &HyprWindow,
     clients: &[HyprClient],
     active_workspace_id: i64,
+    is_special_active: bool,
 ) -> HyprWindow {
     let is_pip = |w_class: &str, w_title: &str| -> bool {
         crate::state::context::is_pip_window(w_class, w_title)
@@ -271,7 +275,14 @@ pub fn resolve_effective_window(
         if !c.mapped || c.hidden {
             continue;
         }
-        if !c.pinned && c.workspace.id != active_workspace_id {
+        let on_active_ws = if is_special_active {
+            c.workspace.id == active_workspace_id
+                || c.workspace.id < 0
+                || c.workspace.name.starts_with("special")
+        } else {
+            c.workspace.id == active_workspace_id
+        };
+        if !c.pinned && !on_active_ws {
             continue;
         }
         if c.at.len() < 2 || c.size.len() < 2 {
@@ -314,7 +325,13 @@ pub fn resolve_effective_window(
         // If active_window is PiP or on another workspace, reset to default (empty).
         let active_is_pip = is_pip(&active_window.class, &active_window.title);
         let active_is_on_ws = active_window.pinned
-            || (active_window.workspace.id != 0 && active_window.workspace.id == active_workspace_id);
+            || (if is_special_active {
+                active_window.workspace.id == active_workspace_id
+                    || active_window.workspace.id < 0
+                    || active_window.workspace.name.starts_with("special")
+            } else {
+                active_window.workspace.id != 0 && active_window.workspace.id == active_workspace_id
+            });
 
         if active_is_pip || !active_is_on_ws {
             HyprWindow::default()
@@ -381,16 +398,36 @@ pub async fn get_context() -> anyhow::Result<HyprContext> {
     let (target_mon, local_cursor) = resolve_target_monitor_and_local_cursor(&raw_cursor, &monitors);
     let target_monitor_name = target_mon.map(|m| m.name.clone());
 
-    let active_ws_id = target_mon
-        .map(|m| m.active_workspace.id)
-        .unwrap_or(window.workspace.id);
+    let is_special_on_mon = target_mon
+        .as_ref()
+        .map(|m| m.special_workspace.id != 0 && !m.special_workspace.name.is_empty())
+        .unwrap_or(false);
+
+    let is_special_active = is_special_on_mon
+        || window.workspace.id < 0
+        || window.workspace.name.starts_with("special");
+
+    let active_ws_id = if is_special_on_mon {
+        target_mon.as_ref().unwrap().special_workspace.id
+    } else if window.workspace.id < 0 {
+        window.workspace.id
+    } else if let Some(m) = target_mon {
+        m.active_workspace.id
+    } else {
+        window.workspace.id
+    };
 
     let effective_window = resolve_effective_window(
         &raw_cursor,
         &window,
         &clients,
         active_ws_id,
+        is_special_active,
     );
+
+    let is_special_workspace = is_special_active
+        || effective_window.workspace.id < 0
+        || effective_window.workspace.name.starts_with("special");
 
     Ok(HyprContext {
         cursor: local_cursor,
@@ -398,6 +435,7 @@ pub async fn get_context() -> anyhow::Result<HyprContext> {
         clients,
         monitors,
         target_monitor_name,
+        is_special_workspace,
     })
 }
 
@@ -665,6 +703,7 @@ mod tests {
                 transform: 0,
                 focused: false,
                 active_workspace: HyprWorkspace { id: 1, name: "1".into() },
+                special_workspace: HyprWorkspace::default(),
             },
             HyprMonitor {
                 id: 1,
@@ -677,6 +716,7 @@ mod tests {
                 transform: 0,
                 focused: true,
                 active_workspace: HyprWorkspace { id: 2, name: "2".into() },
+                special_workspace: HyprWorkspace::default(),
             },
         ];
 
@@ -723,9 +763,51 @@ mod tests {
         // Cursor on empty workspace 3 at (500, 400), away from the PiP window (at 1200, 700)
         let raw_cursor = HyprCursorPos { x: 500.0, y: 400.0 };
         let active_ws_id = 3;
-        let eff = resolve_effective_window(&raw_cursor, &active_win, &clients, active_ws_id);
+        let eff = resolve_effective_window(&raw_cursor, &active_win, &clients, active_ws_id, false);
         assert_eq!(eff.class, "");
         assert_eq!(eff.title, "");
         assert_eq!(crate::state::context::resolve_context(&eff.class, &eff.title), crate::state::context::Context::Default);
+    }
+
+    #[test]
+    fn test_special_workspace_effective_window() {
+        let clients = vec![
+            HyprClient {
+                address: "0xspecial_kitty".into(),
+                class: "kitty".into(),
+                initial_class: "kitty".into(),
+                title: "agy".into(),
+                pid: 5678,
+                workspace: HyprWorkspace { id: -99, name: "special:special".into() },
+                at: vec![100, 100],
+                size: vec![800, 600],
+                floating: false,
+                pinned: false,
+                mapped: true,
+                hidden: false,
+            }
+        ];
+        let active_win = HyprWindow {
+            address: "0xspecial_kitty".into(),
+            class: "kitty".into(),
+            initial_class: "kitty".into(),
+            title: "agy".into(),
+            pid: 5678,
+            workspace: HyprWorkspace { id: -99, name: "special:special".into() },
+            at: vec![100, 100],
+            size: vec![800, 600],
+            floating: false,
+            pinned: false,
+            mapped: true,
+            hidden: false,
+        };
+
+        // Cursor inside the kitty window at (200, 200)
+        let raw_cursor = HyprCursorPos { x: 200.0, y: 200.0 };
+        let active_ws_id = -99;
+        let eff = resolve_effective_window(&raw_cursor, &active_win, &clients, active_ws_id, true);
+        assert_eq!(eff.class, "kitty");
+        assert_eq!(eff.workspace.name, "special:special");
+        assert_eq!(eff.workspace.id, -99);
     }
 }

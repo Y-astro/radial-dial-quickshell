@@ -374,6 +374,10 @@ impl MenuState {
             let to = self.drag.target_index as usize;
             if from != to && from < self.current_slices.len() && to < self.current_slices.len() {
                 self.reorder_current_slices(from, to);
+                let _ = self.config.save();
+                self.hovered_index = to as i32;
+                self.anim.hover_factor = 1.0;
+                self.anim.hover_elapsed = 160.0;
                 self.drag.reset();
                 return true;
             }

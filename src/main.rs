@@ -116,6 +116,9 @@ pub struct App {
     pub waiting_for_frame: bool,
     pub render_pixmap: Option<Pixmap>,
 
+    // Modal click isolation
+    pub modal_click_active: bool,
+
     // Animation runner state
     pub last_frame_time: std::time::Instant,
 }
@@ -490,6 +493,7 @@ impl App {
             dirty: false,
             waiting_for_frame: false,
             render_pixmap: None,
+            modal_click_active: false,
             last_frame_time: std::time::Instant::now(),
         })
     }
@@ -498,6 +502,7 @@ impl App {
     fn handle_pointer_press(&mut self, button: u32, x: f32, y: f32) {
         // If folder browser modal is open:
         if self.folder_browser.is_some() {
+            self.modal_click_active = true;
             if is_right_button(button) {
                 self.folder_browser = None;
                 self.dirty = true;
@@ -512,6 +517,7 @@ impl App {
 
         // If customizer modal is open:
         if self.customizer.is_some() {
+            self.modal_click_active = true;
             if is_right_button(button) {
                 self.customizer = None;
                 self.seat_handler.customizer_open = false;
@@ -537,6 +543,9 @@ impl App {
                     c.open_file_add();
                     self.customizer = Some(c);
                     self.seat_handler.customizer_open = true;
+                    self.menu.hovered_index = -1;
+                    self.menu.outer_hovered_index = -1;
+                    self.menu.center_hovered = false;
                     self.dirty = true;
                     return;
                 } else if is_right_button(button) {
@@ -545,6 +554,9 @@ impl App {
                         c.open_file_edit(target_idx, &sub.label, sub.target_path.as_deref().unwrap_or(""), &sub.icon);
                         self.customizer = Some(c);
                         self.seat_handler.customizer_open = true;
+                        self.menu.hovered_index = -1;
+                        self.menu.outer_hovered_index = -1;
+                        self.menu.center_hovered = false;
                         self.dirty = true;
                         return;
                     }
@@ -561,6 +573,9 @@ impl App {
                 c.selected_item = Some(self.menu.current_slices[slot_idx].id.clone());
                 self.customizer = Some(c);
                 self.seat_handler.customizer_open = true;
+                self.menu.hovered_index = -1;
+                self.menu.outer_hovered_index = -1;
+                self.menu.center_hovered = false;
                 self.dirty = true;
                 return;
             } else {
@@ -582,9 +597,14 @@ impl App {
     }
 
     fn handle_pointer_release(&mut self, button: u32) {
+        if self.modal_click_active {
+            self.modal_click_active = false;
+            return;
+        }
         if self.customizer.is_some() || self.folder_browser.is_some() {
             return;
         }
+        self.dirty = true;
         if let Some(action) = self.seat_handler.handle_pointer_button(
             &mut self.menu,
             button,
@@ -796,8 +816,6 @@ impl App {
                                         self.menu.config.remove_slice(&self.menu.context.to_string(), item_id);
                                         let _ = self.menu.config.save();
                                         self.menu.refresh_current_slices();
-                                        self.customizer = None;
-                                        self.seat_handler.customizer_open = false;
                                         self.dirty = true;
                                         return;
                                     }
@@ -942,6 +960,9 @@ impl App {
                         fb.set_listing(listing);
                         fb.open(&start_path);
                         self.folder_browser = Some(fb);
+                        self.menu.hovered_index = -1;
+                        self.menu.outer_hovered_index = -1;
+                        self.menu.center_hovered = false;
                         self.dirty = true;
                         return;
                     }
@@ -1566,8 +1587,16 @@ impl App {
             return true;
         }
 
-        let hovered = self.menu.hovered_index;
-        let hover_factor = self.menu.anim.hover_factor;
+        let hovered = if self.menu.drag.is_dragging {
+            self.menu.drag.target_index
+        } else {
+            self.menu.hovered_index
+        };
+        let hover_factor = if self.menu.drag.is_dragging {
+            1.0
+        } else {
+            self.menu.anim.hover_factor
+        };
 
         let modal_active = self.folder_browser.is_some() || self.customizer.is_some();
 
@@ -2255,6 +2284,7 @@ async fn run_headless_daemon() -> Result<()> {
 #[cfg(test)]
 mod main_tests {
     use super::*;
+    use crate::state::actions::{ActionId, SliceItem};
 
     #[test]
     fn test_parse_hex_color() {
@@ -2297,5 +2327,66 @@ mod main_tests {
             }
         }
         assert_eq!(menu.phase, MenuPhase::Open);
+    }
+
+    #[test]
+    fn test_modal_click_isolation_prevents_action_bleed() {
+        let mut seat = SeatHandler::new();
+        let mut menu = MenuState::new(RadialConfig::default(), false);
+        menu.center_x = 200.0;
+        menu.center_y = 200.0;
+        menu.phase = MenuPhase::Open;
+        let mut term = SliceItem::new("term", "Terminal", "terminal", 0);
+        term.action = Some(ActionId::Terminal);
+        menu.current_slices = vec![term];
+
+        // Simulate opening customizer on slice 0: hovered_index is cleared to -1
+        menu.hovered_index = -1;
+        let mut modal_click_active = false;
+        let mut customizer_open = true;
+
+        // User clicks inside customizer (e.g. at remove or select position)
+        // Modal consumes press
+        modal_click_active = true;
+        // Modal finishes action and closes
+        customizer_open = false;
+
+        // User releases mouse button: release must be consumed by modal_click_active!
+        let action = if modal_click_active {
+            modal_click_active = false;
+            None
+        } else if customizer_open {
+            None
+        } else {
+            seat.handle_pointer_button(&mut menu, 0x110, ButtonState::Released)
+        };
+
+        // No action triggered! Menu stays open, terminal is NOT executed!
+        assert_eq!(action, None);
+        assert_eq!(menu.phase, MenuPhase::Open);
+    }
+
+    #[test]
+    fn test_drag_reorder_persists_config() {
+        let mut menu = MenuState::new(RadialConfig::default(), false);
+        menu.center_x = 200.0;
+        menu.center_y = 200.0;
+        menu.phase = MenuPhase::Open;
+        let s0 = SliceItem::new("item0", "Item 0", "icon0", 0);
+        let s1 = SliceItem::new("item1", "Item 1", "icon1", 1);
+        menu.current_slices = vec![s0, s1];
+        menu.config.global_slices = vec!["item0".into(), "item1".into()];
+
+        menu.drag.start_drag(0, 200.0, 100.0);
+        menu.drag.is_dragging = true;
+        menu.drag.target_index = 1;
+
+        let reordered = menu.finish_drag_reorder();
+        assert!(reordered);
+        assert_eq!(menu.current_slices[0].id, "item1");
+        assert_eq!(menu.current_slices[1].id, "item0");
+        assert_eq!(menu.config.global_slices[0], "item1");
+        assert_eq!(menu.config.global_slices[1], "item0");
+        assert_eq!(menu.hovered_index, 1);
     }
 }

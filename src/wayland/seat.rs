@@ -384,9 +384,14 @@ impl SeatHandler {
         }
 
         if state == ButtonState::Pressed {
+            // Main ring slice pressed -> start potential drag-to-reorder.
+            // Do NOT execute click on press! Defer to ButtonState::Released so user can drag.
             if menu.hovered_index >= 0 && menu.outer_hovered_index < 0 && !menu.center_hovered {
                 menu.drag.start_drag(menu.hovered_index, self.last_x, self.last_y);
+                self.click_handled_on_press = false;
+                return None;
             }
+
             self.click_handled_on_press = true;
             return self.execute_left_click(menu);
         }
@@ -394,6 +399,7 @@ impl SeatHandler {
         if state == ButtonState::Released {
             if menu.drag.is_dragging {
                 menu.finish_drag_reorder();
+                let _ = menu.config.save();
                 menu.drag.reset();
                 self.click_handled_on_press = false;
                 return None;
@@ -810,7 +816,13 @@ mod tests {
         seat.handle_pointer_motion(&mut menu, 200.0, 100.0);
         assert_eq!(menu.hovered_index, 0);
 
-        let action = seat.handle_pointer_button(&mut menu, BTN_LEFT, ButtonState::Pressed);
+        // Press initiates potential drag -> no action yet
+        let action_press = seat.handle_pointer_button(&mut menu, BTN_LEFT, ButtonState::Pressed);
+        assert_eq!(action_press, None);
+        assert_eq!(menu.phase, MenuPhase::Open);
+
+        // Release without dragging executes action
+        let action = seat.handle_pointer_button(&mut menu, BTN_LEFT, ButtonState::Released);
         assert_eq!(action, Some(ActionId::Terminal));
         assert_eq!(
             menu.phase,
@@ -835,19 +847,22 @@ mod tests {
         seat.handle_pointer_motion(&mut menu, 200.0, 100.0);
         assert_eq!(menu.hovered_index, 0);
 
-        // Click toggles sub-tier open
+        // Press initiates potential drag
         let action = seat.handle_pointer_button(&mut menu, BTN_LEFT, ButtonState::Pressed);
+        assert_eq!(action, None);
+        assert_eq!(menu.active_sub_tier, None);
+
+        // Release toggles sub-tier open
+        let action = seat.handle_pointer_button(&mut menu, BTN_LEFT, ButtonState::Released);
         assert_eq!(action, None);
         assert_eq!(menu.active_sub_tier, Some(SubTierType::Scratchpad));
         assert!(!menu.sub_slices.is_empty());
         assert_eq!(menu.phase, MenuPhase::Open);
 
-        // Simulate release (doesn't toggle again)
-        seat.handle_pointer_button(&mut menu, BTN_LEFT, ButtonState::Released);
-        assert_eq!(menu.active_sub_tier, Some(SubTierType::Scratchpad));
-
-        // Click again toggles sub-tier closed
+        // Click again (Press + Release) toggles sub-tier closed
         let action = seat.handle_pointer_button(&mut menu, BTN_LEFT, ButtonState::Pressed);
+        assert_eq!(action, None);
+        let action = seat.handle_pointer_button(&mut menu, BTN_LEFT, ButtonState::Released);
         assert_eq!(action, None);
         assert_eq!(menu.active_sub_tier, None);
     }
@@ -903,8 +918,10 @@ mod tests {
         menu.center_x = 200.0;
         menu.center_y = 200.0;
         menu.phase = MenuPhase::Open;
+        let mut s0 = make_slice("slice0", "Slice 0", 0);
+        s0.action = Some(ActionId::Terminal);
         menu.current_slices = vec![
-            make_slice("slice0", "Slice 0", 0),
+            s0,
             make_slice("slice1", "Slice 1", 1),
             make_slice("slice2", "Slice 2", 2),
             make_slice("slice3", "Slice 3", 3),
@@ -914,8 +931,9 @@ mod tests {
         seat.handle_pointer_motion(&mut menu, 200.0, 100.0);
         assert_eq!(menu.hovered_index, 0);
 
-        // Press left button to start drag tracking
-        seat.handle_pointer_button(&mut menu, BTN_LEFT, ButtonState::Pressed);
+        // Press left button to start drag tracking -> does NOT fire Terminal!
+        let press_act = seat.handle_pointer_button(&mut menu, BTN_LEFT, ButtonState::Pressed);
+        assert_eq!(press_act, None);
         assert_eq!(menu.drag.from_index, 0);
 
         // Move pointer 50px right (x=250, y=100) -> distance from drag start > 10px
@@ -1052,14 +1070,22 @@ mod tests {
         );
         assert_eq!(axis_act, Some(ActionId::VolumeUp));
 
-        // Button via PointerEvent
+        // Button via PointerEvent (Press + Release cycle for main ring slice)
         menu.hovered_index = 0;
         menu.phase = MenuPhase::Open;
-        let btn_act = seat.handle_pointer(
+        let press_act = seat.handle_pointer(
             &mut menu,
             PointerEvent::Button {
                 button: BTN_LEFT,
                 state: ButtonState::Pressed,
+            },
+        );
+        assert_eq!(press_act, None);
+        let btn_act = seat.handle_pointer(
+            &mut menu,
+            PointerEvent::Button {
+                button: BTN_LEFT,
+                state: ButtonState::Released,
             },
         );
         assert_eq!(btn_act, Some(ActionId::Terminal));

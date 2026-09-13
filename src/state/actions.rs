@@ -795,7 +795,7 @@ pub fn get_command(action: &ActionId) -> Option<String> {
         ActionId::BrowserReopenTab => Some("wtype -M ctrl -M shift -k t -m shift -m ctrl &".into()),
         ActionId::KittyNewWindow => Some("kitty || alacritty || foot &".into()),
         ActionId::KittyAgy => Some("sleep 0.05 && wtype 'agy --dangerously-skip-permissions' -k Return".into()),
-        ActionId::LaunchAgyTerminal => Some("kitty agy --dangerously-skip-permissions &".into()),
+        ActionId::LaunchAgyTerminal => Some("kitty & sleep 0.35 && wtype 'agy --dangerously-skip-permissions' -k Return".into()),
         ActionId::KittyClear => Some("sleep 0.05 && wtype -M ctrl -k l -m ctrl".into()),
         ActionId::KittyDolphin => Some("PID=0; TARGET_PID=\"$PID\"; while true; do NEXT_PID=$(pgrep -P \"$TARGET_PID\" 2>/dev/null | tail -n 1); if [ -n \"$NEXT_PID\" ] && [ -d \"/proc/$NEXT_PID/cwd\" ]; then TARGET_PID=\"$NEXT_PID\"; else break; fi; done; CWD=$(readlink -f \"/proc/$TARGET_PID/cwd\" 2>/dev/null || echo \"$HOME\"); (dolphin \"$CWD\" || xdg-open \"$CWD\" || nautilus \"$CWD\" || thunar \"$CWD\") &".into()),
         ActionId::FocusWindow { address, workspace } => {

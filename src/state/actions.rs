@@ -45,11 +45,11 @@ pub enum ActionId {
     Lock,
     NightLight,
     // Context: Terminal
-    KittyNewWindow,
+    KittyNewWindow { pid: i64 },
     KittyAgy,
     LaunchAgyTerminal,
     KittyClear,
-    KittyDolphin,
+    KittyDolphin { pid: i64 },
     // Context: Browser
     BrowserTabs,
     BrowserNewTab,
@@ -110,11 +110,11 @@ impl ActionId {
             "session" => Some(ActionId::Session),
             "lock" => Some(ActionId::Lock),
             "nightlight" | "night_light" => Some(ActionId::NightLight),
-            "kitty_new_window" => Some(ActionId::KittyNewWindow),
+            "kitty_new_window" => Some(ActionId::KittyNewWindow { pid: 0 }),
             "kitty_agy" => Some(ActionId::KittyAgy),
             "agy_terminal" | "kitty_launch_agy" | "launch_agy" => Some(ActionId::LaunchAgyTerminal),
             "kitty_clear" => Some(ActionId::KittyClear),
-            "kitty_dolphin" => Some(ActionId::KittyDolphin),
+            "kitty_dolphin" => Some(ActionId::KittyDolphin { pid: 0 }),
             "browsertabs" | "browser_tabs" => Some(ActionId::BrowserTabs),
             "browser_new_tab" => Some(ActionId::BrowserNewTab),
             "browser_close_tab" => Some(ActionId::BrowserCloseTab),
@@ -704,34 +704,54 @@ pub fn get_action_def(id: &str) -> Option<ActionDef> {
 
 /// Port of resolveSliceItem(fnId, slotIdx, win) from RadialMenuActions.qml lines 1282-1309
 pub fn resolve_slice_item(fn_id: &str, slot_idx: usize, in_special: bool) -> SliceItem {
+    resolve_slice_item_with_window(fn_id, slot_idx, in_special, None)
+}
+
+pub fn resolve_slice_item_with_window(
+    fn_id: &str,
+    slot_idx: usize,
+    in_special: bool,
+    window: Option<&crate::ipc::hypr::HyprWindow>,
+) -> SliceItem {
     if fn_id == "scratchpad" {
         return SliceItem::scratchpad(in_special, slot_idx);
     }
+    let win_pid = window.map(|w| w.pid).unwrap_or(0);
     if let Some(def) = get_action_def(fn_id) {
+        let action = if def.has_sub_tier {
+            None
+        } else {
+            match def.id {
+                "kitty_dolphin" => Some(ActionId::KittyDolphin { pid: win_pid }),
+                "kitty_new_window" => Some(ActionId::KittyNewWindow { pid: win_pid }),
+                _ => ActionId::from_id(def.id),
+            }
+        };
         SliceItem {
             id: def.id.to_string(),
             label: def.label.to_string(),
             icon: def.icon.to_string(),
             has_sub_tier: def.has_sub_tier,
             sub_tier_type: def.sub_tier_type,
-            action: if def.has_sub_tier {
-                None
-            } else {
-                ActionId::from_id(def.id)
-            },
+            action,
             slot_index: slot_idx,
             target_path: None,
             target_index: None,
             is_add_button: false,
         }
     } else {
+        let action = match fn_id {
+            "kitty_dolphin" => Some(ActionId::KittyDolphin { pid: win_pid }),
+            "kitty_new_window" => Some(ActionId::KittyNewWindow { pid: win_pid }),
+            _ => ActionId::from_id(fn_id),
+        };
         SliceItem {
             id: fn_id.to_string(),
             label: fn_id.to_string(),
             icon: "extension".to_string(),
             has_sub_tier: false,
             sub_tier_type: None,
-            action: ActionId::from_id(fn_id),
+            action,
             slot_index: slot_idx,
             target_path: None,
             target_index: None,
@@ -748,6 +768,178 @@ pub fn exec(cmd: &str) {
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn();
+}
+
+/// Resolve the live current working directory (CWD) of the shell or active foreground process
+/// running inside the window associated with `pid`.
+pub fn resolve_terminal_cwd(pid: i64) -> std::path::PathBuf {
+    let fallback = std::path::PathBuf::from(shellexpand::tilde("~").to_string());
+
+    let effective_pid = if pid > 0 {
+        pid
+    } else if let Ok(output) = std::process::Command::new("hyprctl")
+        .args(["activewindow", "-j"])
+        .output()
+    {
+        if output.status.success() {
+            if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&output.stdout) {
+                val.get("pid").and_then(|p| p.as_i64()).unwrap_or(0)
+            } else {
+                0
+            }
+        } else {
+            0
+        }
+    } else {
+        0
+    };
+
+    if effective_pid <= 0 {
+        return fallback;
+    }
+
+    fn get_child_pids(p: i64) -> Vec<i64> {
+        let task_children = format!("/proc/{}/task/{}/children", p, p);
+        if let Ok(content) = std::fs::read_to_string(&task_children) {
+            let pids: Vec<i64> = content
+                .split_whitespace()
+                .filter_map(|s| s.parse::<i64>().ok())
+                .collect();
+            if !pids.is_empty() {
+                return pids;
+            }
+        }
+        let mut children = Vec::new();
+        if let Ok(entries) = std::fs::read_dir("/proc") {
+            for entry in entries.flatten() {
+                if let Ok(cpid) = entry.file_name().to_string_lossy().parse::<i64>() {
+                    let stat_path = format!("/proc/{}/stat", cpid);
+                    if let Ok(stat_content) = std::fs::read_to_string(&stat_path) {
+                        if let Some(after_paren) = stat_content.rfind(')') {
+                            let rest = &stat_content[after_paren + 1..];
+                            let parts: Vec<&str> = rest.split_whitespace().collect();
+                            if parts.len() > 1 {
+                                if let Ok(ppid) = parts[1].parse::<i64>() {
+                                    if ppid == p {
+                                        children.push(cpid);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        children
+    }
+
+    fn is_pts_attached(p: i64) -> bool {
+        for fd in 0..=2 {
+            let fd_path = format!("/proc/{}/fd/{}", p, fd);
+            if let Ok(target) = std::fs::read_link(&fd_path) {
+                if let Some(target_str) = target.to_str() {
+                    if target_str.starts_with("/dev/pts/") {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    fn get_tpgid(p: i64) -> i64 {
+        let stat_path = format!("/proc/{}/stat", p);
+        if let Ok(stat_content) = std::fs::read_to_string(&stat_path) {
+            if let Some(after_paren) = stat_content.rfind(')') {
+                let rest = &stat_content[after_paren + 1..];
+                let parts: Vec<&str> = rest.split_whitespace().collect();
+                if parts.len() > 5 {
+                    if let Ok(tpgid) = parts[5].parse::<i64>() {
+                        return tpgid;
+                    }
+                }
+            }
+        }
+        -1
+    }
+
+    fn get_pid_cwd(p: i64) -> Option<std::path::PathBuf> {
+        let cwd_link = format!("/proc/{}/cwd", p);
+        if let Ok(target) = std::fs::read_link(&cwd_link) {
+            if target.is_dir() {
+                return Some(target);
+            }
+        }
+        None
+    }
+
+    let mut descendants = Vec::new();
+    let mut queue = std::collections::VecDeque::new();
+    queue.push_back(effective_pid);
+    while let Some(curr) = queue.pop_front() {
+        let children = get_child_pids(curr);
+        for child in children {
+            if !descendants.contains(&child) {
+                descendants.push(child);
+                queue.push_back(child);
+            }
+        }
+    }
+
+    let mut pts_pids: Vec<i64> = descendants
+        .iter()
+        .copied()
+        .filter(|&p| is_pts_attached(p))
+        .collect();
+
+    if is_pts_attached(effective_pid) && !pts_pids.contains(&effective_pid) {
+        pts_pids.push(effective_pid);
+    }
+
+    // A. Check tpgid (foreground process group) of PTS-attached processes (deepest first)
+    for &p in pts_pids.iter().rev() {
+        let tpgid = get_tpgid(p);
+        if tpgid > 0 {
+            if let Some(cwd) = get_pid_cwd(tpgid) {
+                return cwd;
+            }
+        }
+    }
+
+    // B. Check cwd of PTS-attached processes themselves (deepest first)
+    for &p in pts_pids.iter().rev() {
+        if let Some(cwd) = get_pid_cwd(p) {
+            return cwd;
+        }
+    }
+
+    // C. Check cwd of any descendant process (deepest first)
+    for &p in descendants.iter().rev() {
+        if let Some(cwd) = get_pid_cwd(p) {
+            return cwd;
+        }
+    }
+
+    // D. Check root process itself
+    if let Some(cwd) = get_pid_cwd(effective_pid) {
+        return cwd;
+    }
+
+    fallback
+}
+
+pub fn open_terminal_in_dolphin(pid: i64) {
+    let cwd = resolve_terminal_cwd(pid);
+    let cwd_str = cwd.to_string_lossy().replace('"', "\\\"");
+    let cmd = format!("(dolphin \"{}\" || xdg-open \"{}\" || nautilus \"{}\" || thunar \"{}\") &", cwd_str, cwd_str, cwd_str, cwd_str);
+    exec(&cmd);
+}
+
+pub fn open_terminal_new_window(pid: i64) {
+    let cwd = resolve_terminal_cwd(pid);
+    let cwd_str = cwd.to_string_lossy().replace('"', "\\\"");
+    let cmd = format!("(kitty --directory \"{}\" || alacritty --working-directory \"{}\" || foot -D \"{}\" || kitty || alacritty || foot) &", cwd_str, cwd_str, cwd_str);
+    exec(&cmd);
 }
 
 /// Get the shell command associated with an ActionId, if any.
@@ -793,11 +985,25 @@ pub fn get_command(action: &ActionId) -> Option<String> {
         ActionId::BrowserCloseTab => Some("wtype -M ctrl -k w -m ctrl &".into()),
         ActionId::BrowserDupTab => Some("wtype -M alt -k d -m alt && sleep 0.06 && wtype -M alt -k Return -m alt &".into()),
         ActionId::BrowserReopenTab => Some("wtype -M ctrl -M shift -k t -m shift -m ctrl &".into()),
-        ActionId::KittyNewWindow => Some("kitty || alacritty || foot &".into()),
+        ActionId::KittyNewWindow { pid } => {
+            let cwd = resolve_terminal_cwd(*pid);
+            let cwd_str = cwd.to_string_lossy().replace('"', "\\\"");
+            Some(format!(
+                "(kitty --directory \"{}\" || alacritty --working-directory \"{}\" || foot -D \"{}\" || kitty || alacritty || foot) &",
+                cwd_str, cwd_str, cwd_str
+            ))
+        }
         ActionId::KittyAgy => Some("sleep 0.05 && wtype 'agy --dangerously-skip-permissions' -k Return".into()),
         ActionId::LaunchAgyTerminal => Some("kitty & sleep 0.35 && wtype 'agy --dangerously-skip-permissions' -k Return".into()),
         ActionId::KittyClear => Some("sleep 0.05 && wtype -M ctrl -k l -m ctrl".into()),
-        ActionId::KittyDolphin => Some("PID=0; TARGET_PID=\"$PID\"; while true; do NEXT_PID=$(pgrep -P \"$TARGET_PID\" 2>/dev/null | tail -n 1); if [ -n \"$NEXT_PID\" ] && [ -d \"/proc/$NEXT_PID/cwd\" ]; then TARGET_PID=\"$NEXT_PID\"; else break; fi; done; CWD=$(readlink -f \"/proc/$TARGET_PID/cwd\" 2>/dev/null || echo \"$HOME\"); (dolphin \"$CWD\" || xdg-open \"$CWD\" || nautilus \"$CWD\" || thunar \"$CWD\") &".into()),
+        ActionId::KittyDolphin { pid } => {
+            let cwd = resolve_terminal_cwd(*pid);
+            let cwd_str = cwd.to_string_lossy().replace('"', "\\\"");
+            Some(format!(
+                "(dolphin \"{}\" || xdg-open \"{}\" || nautilus \"{}\" || thunar \"{}\") &",
+                cwd_str, cwd_str, cwd_str, cwd_str
+            ))
+        }
         ActionId::FocusWindow { address, workspace } => {
             let ws_dispatch = if !workspace.is_empty() {
                 if workspace.starts_with("special:") {
@@ -839,12 +1045,21 @@ pub fn get_command(action: &ActionId) -> Option<String> {
 
 /// Execute an action. Uses exact same shell commands as the original QML.
 pub fn execute(action: &ActionId) {
-    if let ActionId::JumpToFile(path) = action {
-        perform_file_jump(path);
-        return;
-    }
-    if let Some(cmd) = get_command(action) {
-        exec(&cmd);
+    match action {
+        ActionId::JumpToFile(path) => {
+            perform_file_jump(path);
+        }
+        ActionId::KittyDolphin { pid } => {
+            open_terminal_in_dolphin(*pid);
+        }
+        ActionId::KittyNewWindow { pid } => {
+            open_terminal_new_window(*pid);
+        }
+        _ => {
+            if let Some(cmd) = get_command(action) {
+                exec(&cmd);
+            }
+        }
     }
 }
 
@@ -1089,11 +1304,11 @@ mod tests {
         assert_eq!(ActionId::from_id("session"), Some(ActionId::Session));
         assert_eq!(ActionId::from_id("lock"), Some(ActionId::Lock));
         assert_eq!(ActionId::from_id("nightlight"), Some(ActionId::NightLight));
-        assert_eq!(ActionId::from_id("kitty_new_window"), Some(ActionId::KittyNewWindow));
+        assert_eq!(ActionId::from_id("kitty_new_window"), Some(ActionId::KittyNewWindow { pid: 0 }));
         assert_eq!(ActionId::from_id("kitty_agy"), Some(ActionId::KittyAgy));
         assert_eq!(ActionId::from_id("agy_terminal"), Some(ActionId::LaunchAgyTerminal));
         assert_eq!(ActionId::from_id("kitty_clear"), Some(ActionId::KittyClear));
-        assert_eq!(ActionId::from_id("kitty_dolphin"), Some(ActionId::KittyDolphin));
+        assert_eq!(ActionId::from_id("kitty_dolphin"), Some(ActionId::KittyDolphin { pid: 0 }));
         assert_eq!(ActionId::from_id("browsertabs"), Some(ActionId::BrowserTabs));
         assert_eq!(ActionId::from_id("browser_new_tab"), Some(ActionId::BrowserNewTab));
         assert_eq!(ActionId::from_id("browser_close_tab"), Some(ActionId::BrowserCloseTab));
@@ -1149,11 +1364,11 @@ mod tests {
         assert!(get_command(&ActionId::BrowserCloseTab).is_some());
         assert!(get_command(&ActionId::BrowserDupTab).is_some());
         assert!(get_command(&ActionId::BrowserReopenTab).is_some());
-        assert!(get_command(&ActionId::KittyNewWindow).is_some());
+        assert!(get_command(&ActionId::KittyNewWindow { pid: 0 }).is_some());
         assert!(get_command(&ActionId::KittyAgy).is_some());
         assert!(get_command(&ActionId::LaunchAgyTerminal).is_some());
         assert!(get_command(&ActionId::KittyClear).is_some());
-        assert!(get_command(&ActionId::KittyDolphin).is_some());
+        assert!(get_command(&ActionId::KittyDolphin { pid: 0 }).is_some());
         assert!(get_command(&ActionId::Scratchpad).is_some());
 
         // Dynamic actions
@@ -1247,5 +1462,14 @@ mod tests {
         let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
         let res = auto_mount_if_needed(&home);
         assert_eq!(res, home);
+    }
+
+    #[test]
+    fn test_resolve_terminal_cwd() {
+        let current_pid = std::process::id() as i64;
+        let cwd = resolve_terminal_cwd(current_pid);
+        assert!(cwd.is_dir());
+        let fallback_cwd = resolve_terminal_cwd(999_999_999);
+        assert!(fallback_cwd.is_dir());
     }
 }

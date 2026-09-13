@@ -179,7 +179,14 @@ impl MenuState {
         self.current_slices = slice_ids
             .iter()
             .enumerate()
-            .map(|(idx, id)| crate::state::actions::resolve_slice_item(id, idx, in_special))
+            .map(|(idx, id)| {
+                crate::state::actions::resolve_slice_item_with_window(
+                    id,
+                    idx,
+                    in_special,
+                    Some(&self.window_info),
+                )
+            })
             .collect();
 
         self.phase = MenuPhase::Opening;
@@ -260,7 +267,14 @@ impl MenuState {
         self.current_slices = slice_ids
             .iter()
             .enumerate()
-            .map(|(idx, id)| crate::state::actions::resolve_slice_item(id, idx, in_special))
+            .map(|(idx, id)| {
+                crate::state::actions::resolve_slice_item_with_window(
+                    id,
+                    idx,
+                    in_special,
+                    Some(&self.window_info),
+                )
+            })
             .collect();
     }
 
@@ -711,11 +725,11 @@ mod tests {
         // Slot 1: kitty_new_window (action = ActionId::KittyNewWindow)
         // Key 2 triggers Slot 1 (1-based index)
         let action = menu.handle_number_key(2);
-        assert_eq!(action, Some(ActionId::KittyNewWindow));
+        assert_eq!(action, Some(ActionId::KittyNewWindow { pid: 1000 }));
         assert_eq!(
             menu.phase,
             MenuPhase::ClosingAnimated {
-                pending_action: Some(ActionId::KittyNewWindow)
+                pending_action: Some(ActionId::KittyNewWindow { pid: 1000 })
             }
         );
 

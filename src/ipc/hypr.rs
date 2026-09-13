@@ -94,6 +94,12 @@ pub struct HyprContext {
     pub monitors: Vec<HyprMonitor>,
     pub target_monitor_name: Option<String>,
     pub is_special_workspace: bool,
+    /// PID of the Hyprland-reported active window at the time the dial was opened.
+    /// This is the raw j/activewindow pid, NOT the cursor-based effective window.
+    /// Used as fallback for terminal CWD resolution when cursor is on empty space.
+    pub active_window_pid: i64,
+    /// Title of the Hyprland-reported active window at the time the dial was opened.
+    pub active_window_title: String,
 }
 
 /// Socket Discovery (port of hypr_ipc.py get_hypr_socket())
@@ -436,6 +442,8 @@ pub async fn get_context() -> anyhow::Result<HyprContext> {
         monitors,
         target_monitor_name,
         is_special_workspace,
+        active_window_pid: window.pid,
+        active_window_title: window.title,
     })
 }
 

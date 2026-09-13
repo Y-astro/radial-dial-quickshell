@@ -35,6 +35,12 @@ pub struct MenuState {
     pub center_y: f32,
     pub context: Context,
     pub window_info: HyprWindow,
+    /// Raw PID from j/activewindow at the time the menu was opened.
+    /// Used as the authoritative pid for terminal actions (e.g., Open CWD in Dolphin)
+    /// even when the cursor was on empty space and window_info.pid is 0.
+    pub active_window_pid: i64,
+    /// Raw title from j/activewindow at the time the menu was opened.
+    pub active_window_title: String,
     pub current_slices: Vec<SliceItem>,
     pub browser_tabs: Vec<BrowserTab>,
     pub active_clients: Vec<HyprClient>,
@@ -107,6 +113,8 @@ impl MenuState {
             center_y: 0.0,
             context: Context::Default,
             window_info: HyprWindow::default(),
+            active_window_pid: 0,
+            active_window_title: String::new(),
             current_slices: Vec::new(),
             browser_tabs: Vec::new(),
             active_clients: Vec::new(),
@@ -167,6 +175,18 @@ impl MenuState {
         self.center_x = ctx.cursor.x;
         self.center_y = ctx.cursor.y;
         self.window_info = ctx.window;
+        // Use active_window_pid from context (raw j/activewindow pid) as the authoritative
+        // terminal pid, falling back to window_info.pid if not set.
+        self.active_window_pid = if ctx.active_window_pid > 0 {
+            ctx.active_window_pid
+        } else {
+            self.window_info.pid
+        };
+        self.active_window_title = if !ctx.active_window_title.is_empty() {
+            ctx.active_window_title
+        } else {
+            self.window_info.title.clone()
+        };
         self.active_clients = ctx.clients;
 
         self.is_special_workspace = ctx.is_special_workspace
@@ -176,6 +196,16 @@ impl MenuState {
             );
         let in_special = self.is_special_workspace;
         let slice_ids = self.config.get_active_slice_ids(&self.context.to_string());
+        // Use active_window_pid and active_window_title for terminal CWD actions
+        // (more reliable than window_info which may be empty when cursor was on empty space)
+        let effective_win_pid = self.active_window_pid;
+        let mut effective_win = self.window_info.clone();
+        if effective_win.pid == 0 && effective_win_pid > 0 {
+            effective_win.pid = effective_win_pid;
+        }
+        if effective_win.title.is_empty() && !self.active_window_title.is_empty() {
+            effective_win.title = self.active_window_title.clone();
+        }
         self.current_slices = slice_ids
             .iter()
             .enumerate()
@@ -184,7 +214,7 @@ impl MenuState {
                     id,
                     idx,
                     in_special,
-                    Some(&self.window_info),
+                    Some(&effective_win),
                 )
             })
             .collect();
@@ -264,6 +294,14 @@ impl MenuState {
                 &self.window_info.workspace.name,
             );
         let slice_ids = self.config.get_active_slice_ids(&self.context.to_string());
+        let effective_win_pid = self.active_window_pid;
+        let mut effective_win = self.window_info.clone();
+        if effective_win.pid == 0 && effective_win_pid > 0 {
+            effective_win.pid = effective_win_pid;
+        }
+        if effective_win.title.is_empty() && !self.active_window_title.is_empty() {
+            effective_win.title = self.active_window_title.clone();
+        }
         self.current_slices = slice_ids
             .iter()
             .enumerate()
@@ -272,7 +310,7 @@ impl MenuState {
                     id,
                     idx,
                     in_special,
-                    Some(&self.window_info),
+                    Some(&effective_win),
                 )
             })
             .collect();
@@ -725,11 +763,11 @@ mod tests {
         // Slot 1: kitty_new_window (action = ActionId::KittyNewWindow)
         // Key 2 triggers Slot 1 (1-based index)
         let action = menu.handle_number_key(2);
-        assert_eq!(action, Some(ActionId::KittyNewWindow { pid: 1000 }));
+        assert_eq!(action, Some(ActionId::KittyNewWindow { pid: 1000, title: "~".into() }));
         assert_eq!(
             menu.phase,
             MenuPhase::ClosingAnimated {
-                pending_action: Some(ActionId::KittyNewWindow { pid: 1000 })
+                pending_action: Some(ActionId::KittyNewWindow { pid: 1000, title: "~".into() })
             }
         );
 

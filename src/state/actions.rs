@@ -45,11 +45,11 @@ pub enum ActionId {
     Lock,
     NightLight,
     // Context: Terminal
-    KittyNewWindow { pid: i64 },
+    KittyNewWindow { pid: i64, title: String },
     KittyAgy,
     LaunchAgyTerminal,
     KittyClear,
-    KittyDolphin { pid: i64 },
+    KittyDolphin { pid: i64, title: String },
     // Context: Browser
     BrowserTabs,
     BrowserNewTab,
@@ -110,11 +110,11 @@ impl ActionId {
             "session" => Some(ActionId::Session),
             "lock" => Some(ActionId::Lock),
             "nightlight" | "night_light" => Some(ActionId::NightLight),
-            "kitty_new_window" => Some(ActionId::KittyNewWindow { pid: 0 }),
+            "kitty_new_window" => Some(ActionId::KittyNewWindow { pid: 0, title: String::new() }),
             "kitty_agy" => Some(ActionId::KittyAgy),
             "agy_terminal" | "kitty_launch_agy" | "launch_agy" => Some(ActionId::LaunchAgyTerminal),
             "kitty_clear" => Some(ActionId::KittyClear),
-            "kitty_dolphin" => Some(ActionId::KittyDolphin { pid: 0 }),
+            "kitty_dolphin" => Some(ActionId::KittyDolphin { pid: 0, title: String::new() }),
             "browsertabs" | "browser_tabs" => Some(ActionId::BrowserTabs),
             "browser_new_tab" => Some(ActionId::BrowserNewTab),
             "browser_close_tab" => Some(ActionId::BrowserCloseTab),
@@ -717,13 +717,14 @@ pub fn resolve_slice_item_with_window(
         return SliceItem::scratchpad(in_special, slot_idx);
     }
     let win_pid = window.map(|w| w.pid).unwrap_or(0);
+    let win_title = window.map(|w| w.title.clone()).unwrap_or_default();
     if let Some(def) = get_action_def(fn_id) {
         let action = if def.has_sub_tier {
             None
         } else {
             match def.id {
-                "kitty_dolphin" => Some(ActionId::KittyDolphin { pid: win_pid }),
-                "kitty_new_window" => Some(ActionId::KittyNewWindow { pid: win_pid }),
+                "kitty_dolphin" => Some(ActionId::KittyDolphin { pid: win_pid, title: win_title.clone() }),
+                "kitty_new_window" => Some(ActionId::KittyNewWindow { pid: win_pid, title: win_title.clone() }),
                 _ => ActionId::from_id(def.id),
             }
         };
@@ -741,8 +742,8 @@ pub fn resolve_slice_item_with_window(
         }
     } else {
         let action = match fn_id {
-            "kitty_dolphin" => Some(ActionId::KittyDolphin { pid: win_pid }),
-            "kitty_new_window" => Some(ActionId::KittyNewWindow { pid: win_pid }),
+            "kitty_dolphin" => Some(ActionId::KittyDolphin { pid: win_pid, title: win_title.clone() }),
+            "kitty_new_window" => Some(ActionId::KittyNewWindow { pid: win_pid, title: win_title.clone() }),
             _ => ActionId::from_id(fn_id),
         };
         SliceItem {
@@ -770,32 +771,99 @@ pub fn exec(cmd: &str) {
         .spawn();
 }
 
+/// Try extracting a valid directory path from a terminal window title.
+/// Supports common patterns:
+/// - Fish: "~/Documents - fish", "~/Documents: ls - fish", "~ - fish"
+/// - Bash: "user@host: ~/Documents", "user@host:~/Documents"
+/// - Generic: "~/Documents", "/home/astro/Documents"
+pub fn extract_path_from_title(title: &str) -> Option<std::path::PathBuf> {
+    let t = title.trim();
+    if t.is_empty() {
+        return None;
+    }
+
+    let mut candidates = Vec::new();
+    candidates.push(t.to_string());
+
+    // 1. Split on " - " (very common in shells: "<path> - fish" or "<path>: <cmd> - fish")
+    if let Some((left, _)) = t.split_once(" - ") {
+        let l = left.trim();
+        candidates.push(l.to_string());
+        if let Some((dir, _)) = l.split_once(": ") {
+            candidates.push(dir.trim().to_string());
+        }
+    }
+
+    // 2. Split on ":" (e.g. "user@host: ~/Documents" or "~/Documents: ls")
+    if t.contains(':') {
+        for part in t.split(':') {
+            let p = part.trim();
+            if let Some((left, _)) = p.split_once(" - ") {
+                candidates.push(left.trim().to_string());
+            }
+            candidates.push(p.to_string());
+        }
+    }
+
+    // 3. Individual whitespace-separated tokens starting with / or ~
+    for token in t.split_whitespace() {
+        let clean = token.trim_matches(|c| c == ':' || c == '\'' || c == '"' || c == '[' || c == ']' || c == '(' || c == ')');
+        if clean.starts_with('/') || clean.starts_with('~') {
+            candidates.push(clean.to_string());
+        }
+    }
+
+    for cand in candidates {
+        if cand.is_empty() {
+            continue;
+        }
+        let expanded = shellexpand::tilde(&cand).to_string();
+        let path = std::path::PathBuf::from(&expanded);
+        if path.is_dir() {
+            if let Ok(canonical) = path.canonicalize() {
+                return Some(canonical);
+            }
+            return Some(path);
+        }
+    }
+
+    None
+}
+
 /// Resolve the live current working directory (CWD) of the shell or active foreground process
-/// running inside the window associated with `pid`.
-pub fn resolve_terminal_cwd(pid: i64) -> std::path::PathBuf {
+/// running inside the window associated with `pid` and `title`.
+pub fn resolve_terminal_cwd(pid: i64, title: &str) -> std::path::PathBuf {
     let fallback = std::path::PathBuf::from(shellexpand::tilde("~").to_string());
 
-    let effective_pid = if pid > 0 {
-        pid
+    // 1. Try extracting candidate path from window title first
+    let title_candidate = extract_path_from_title(title);
+
+    let (effective_pid, active_title) = if pid > 0 {
+        (pid, title.to_string())
     } else if let Ok(output) = std::process::Command::new("hyprctl")
         .args(["activewindow", "-j"])
         .output()
     {
         if output.status.success() {
             if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&output.stdout) {
-                val.get("pid").and_then(|p| p.as_i64()).unwrap_or(0)
+                let p = val.get("pid").and_then(|p| p.as_i64()).unwrap_or(0);
+                let t = val.get("title").and_then(|t| t.as_str()).unwrap_or("").to_string();
+                (p, t)
             } else {
-                0
+                (0, String::new())
             }
         } else {
-            0
+            (0, String::new())
         }
     } else {
-        0
+        (0, String::new())
     };
 
+    // If we didn't have a title candidate before, try active_title
+    let title_candidate = title_candidate.or_else(|| extract_path_from_title(&active_title));
+
     if effective_pid <= 0 {
-        return fallback;
+        return title_candidate.unwrap_or(fallback);
     }
 
     fn get_child_pids(p: i64) -> Vec<i64> {
@@ -833,18 +901,38 @@ pub fn resolve_terminal_cwd(pid: i64) -> std::path::PathBuf {
         children
     }
 
-    fn is_pts_attached(p: i64) -> bool {
+    fn get_pts_path(p: i64) -> Option<String> {
         for fd in 0..=2 {
             let fd_path = format!("/proc/{}/fd/{}", p, fd);
             if let Ok(target) = std::fs::read_link(&fd_path) {
                 if let Some(target_str) = target.to_str() {
                     if target_str.starts_with("/dev/pts/") {
-                        return true;
+                        return Some(target_str.to_string());
                     }
                 }
             }
         }
-        false
+        None
+    }
+
+    fn get_pts_mtime(pts: &str) -> std::time::SystemTime {
+        std::fs::metadata(pts)
+            .and_then(|m| m.modified())
+            .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
+    }
+
+    fn get_comm(p: i64) -> String {
+        let comm_path = format!("/proc/{}/comm", p);
+        std::fs::read_to_string(&comm_path)
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default()
+    }
+
+    fn is_known_shell(comm: &str) -> bool {
+        matches!(
+            comm,
+            "fish" | "bash" | "zsh" | "sh" | "nu" | "dash" | "csh" | "tcsh" | "ksh" | "xonsh"
+        )
     }
 
     fn get_tpgid(p: i64) -> i64 {
@@ -867,6 +955,9 @@ pub fn resolve_terminal_cwd(pid: i64) -> std::path::PathBuf {
         let cwd_link = format!("/proc/{}/cwd", p);
         if let Ok(target) = std::fs::read_link(&cwd_link) {
             if target.is_dir() {
+                if let Ok(canonical) = target.canonicalize() {
+                    return Some(canonical);
+                }
                 return Some(target);
             }
         }
@@ -886,41 +977,105 @@ pub fn resolve_terminal_cwd(pid: i64) -> std::path::PathBuf {
         }
     }
 
-    let mut pts_pids: Vec<i64> = descendants
-        .iter()
-        .copied()
-        .filter(|&p| is_pts_attached(p))
-        .collect();
-
-    if is_pts_attached(effective_pid) && !pts_pids.contains(&effective_pid) {
-        pts_pids.push(effective_pid);
+    // Phase 1: If title_candidate exists, check if any descendant process (shell or foreground)
+    // has a CWD matching title_candidate!
+    if let Some(ref cand) = title_candidate {
+        for &p in &descendants {
+            if let Some(cwd) = get_pid_cwd(p) {
+                if cwd == *cand {
+                    log::info!("resolve_terminal_cwd: descendant PID {} matches title candidate {:?}", p, cand);
+                    return cwd;
+                }
+            }
+        }
+        log::info!("resolve_terminal_cwd: using title candidate directory: {:?}", cand);
+        return cand.clone();
     }
 
-    // A. Check tpgid (foreground process group) of PTS-attached processes (deepest first)
-    for &p in pts_pids.iter().rev() {
-        let tpgid = get_tpgid(p);
-        if tpgid > 0 {
-            if let Some(cwd) = get_pid_cwd(tpgid) {
+    // Phase 2: Title did not yield a directory.
+    // Inspect PTS-attached descendants, prioritizing the most recently active terminal PTS.
+    struct PtsProc {
+        pid: i64,
+        pts: String,
+        mtime: std::time::SystemTime,
+        is_shell: bool,
+        tpgid: i64,
+    }
+
+    let mut pts_procs = Vec::new();
+    for &p in &descendants {
+        if let Some(pts) = get_pts_path(p) {
+            let mtime = get_pts_mtime(&pts);
+            let comm = get_comm(p);
+            let is_shell = is_known_shell(&comm);
+            let tpgid = get_tpgid(p);
+            pts_procs.push(PtsProc {
+                pid: p,
+                pts,
+                mtime,
+                is_shell,
+                tpgid,
+            });
+        }
+    }
+
+    if let Some(pts) = get_pts_path(effective_pid) {
+        let mtime = get_pts_mtime(&pts);
+        let comm = get_comm(effective_pid);
+        let is_shell = is_known_shell(&comm);
+        let tpgid = get_tpgid(effective_pid);
+        pts_procs.push(PtsProc {
+            pid: effective_pid,
+            pts,
+            mtime,
+            is_shell,
+            tpgid,
+        });
+    }
+
+    // Sort by PTS mtime descending (most recently active terminal first), then shells first
+    pts_procs.sort_by(|a, b| {
+        b.mtime
+            .cmp(&a.mtime)
+            .then_with(|| b.is_shell.cmp(&a.is_shell))
+            .then_with(|| b.pid.cmp(&a.pid))
+    });
+
+    // Check foreground process group (tpgid) of the most active PTS first
+    for proc in &pts_procs {
+        if proc.tpgid > 0 {
+            if let Some(cwd) = get_pid_cwd(proc.tpgid) {
+                log::info!("resolve_terminal_cwd: found foreground CWD from tpgid {} on {}: {:?}", proc.tpgid, proc.pts, cwd);
                 return cwd;
             }
         }
     }
 
-    // B. Check cwd of PTS-attached processes themselves (deepest first)
-    for &p in pts_pids.iter().rev() {
-        if let Some(cwd) = get_pid_cwd(p) {
+    // Check shell process cwd on the most active PTS
+    for proc in &pts_procs {
+        if proc.is_shell {
+            if let Some(cwd) = get_pid_cwd(proc.pid) {
+                log::info!("resolve_terminal_cwd: found shell CWD from PID {} on {}: {:?}", proc.pid, proc.pts, cwd);
+                return cwd;
+            }
+        }
+    }
+
+    // Check any PTS process cwd
+    for proc in &pts_procs {
+        if let Some(cwd) = get_pid_cwd(proc.pid) {
             return cwd;
         }
     }
 
-    // C. Check cwd of any descendant process (deepest first)
+    // Phase 3: Check cwd of any descendant process (deepest first)
     for &p in descendants.iter().rev() {
         if let Some(cwd) = get_pid_cwd(p) {
             return cwd;
         }
     }
 
-    // D. Check root process itself
+    // Phase 4: Check root process itself
     if let Some(cwd) = get_pid_cwd(effective_pid) {
         return cwd;
     }
@@ -928,15 +1083,15 @@ pub fn resolve_terminal_cwd(pid: i64) -> std::path::PathBuf {
     fallback
 }
 
-pub fn open_terminal_in_dolphin(pid: i64) {
-    let cwd = resolve_terminal_cwd(pid);
+pub fn open_terminal_in_dolphin(pid: i64, title: &str) {
+    let cwd = resolve_terminal_cwd(pid, title);
     let cwd_str = cwd.to_string_lossy().replace('"', "\\\"");
     let cmd = format!("(dolphin \"{}\" || xdg-open \"{}\" || nautilus \"{}\" || thunar \"{}\") &", cwd_str, cwd_str, cwd_str, cwd_str);
     exec(&cmd);
 }
 
-pub fn open_terminal_new_window(pid: i64) {
-    let cwd = resolve_terminal_cwd(pid);
+pub fn open_terminal_new_window(pid: i64, title: &str) {
+    let cwd = resolve_terminal_cwd(pid, title);
     let cwd_str = cwd.to_string_lossy().replace('"', "\\\"");
     let cmd = format!("(kitty --directory \"{}\" || alacritty --working-directory \"{}\" || foot -D \"{}\" || kitty || alacritty || foot) &", cwd_str, cwd_str, cwd_str);
     exec(&cmd);
@@ -985,8 +1140,8 @@ pub fn get_command(action: &ActionId) -> Option<String> {
         ActionId::BrowserCloseTab => Some("wtype -M ctrl -k w -m ctrl &".into()),
         ActionId::BrowserDupTab => Some("wtype -M alt -k d -m alt && sleep 0.06 && wtype -M alt -k Return -m alt &".into()),
         ActionId::BrowserReopenTab => Some("wtype -M ctrl -M shift -k t -m shift -m ctrl &".into()),
-        ActionId::KittyNewWindow { pid } => {
-            let cwd = resolve_terminal_cwd(*pid);
+        ActionId::KittyNewWindow { pid, title } => {
+            let cwd = resolve_terminal_cwd(*pid, title);
             let cwd_str = cwd.to_string_lossy().replace('"', "\\\"");
             Some(format!(
                 "(kitty --directory \"{}\" || alacritty --working-directory \"{}\" || foot -D \"{}\" || kitty || alacritty || foot) &",
@@ -996,8 +1151,8 @@ pub fn get_command(action: &ActionId) -> Option<String> {
         ActionId::KittyAgy => Some("sleep 0.05 && wtype 'agy --dangerously-skip-permissions' -k Return".into()),
         ActionId::LaunchAgyTerminal => Some("kitty & sleep 0.35 && wtype 'agy --dangerously-skip-permissions' -k Return".into()),
         ActionId::KittyClear => Some("sleep 0.05 && wtype -M ctrl -k l -m ctrl".into()),
-        ActionId::KittyDolphin { pid } => {
-            let cwd = resolve_terminal_cwd(*pid);
+        ActionId::KittyDolphin { pid, title } => {
+            let cwd = resolve_terminal_cwd(*pid, title);
             let cwd_str = cwd.to_string_lossy().replace('"', "\\\"");
             Some(format!(
                 "(dolphin \"{}\" || xdg-open \"{}\" || nautilus \"{}\" || thunar \"{}\") &",
@@ -1049,11 +1204,11 @@ pub fn execute(action: &ActionId) {
         ActionId::JumpToFile(path) => {
             perform_file_jump(path);
         }
-        ActionId::KittyDolphin { pid } => {
-            open_terminal_in_dolphin(*pid);
+        ActionId::KittyDolphin { pid, title } => {
+            open_terminal_in_dolphin(*pid, title);
         }
-        ActionId::KittyNewWindow { pid } => {
-            open_terminal_new_window(*pid);
+        ActionId::KittyNewWindow { pid, title } => {
+            open_terminal_new_window(*pid, title);
         }
         _ => {
             if let Some(cmd) = get_command(action) {
@@ -1304,11 +1459,11 @@ mod tests {
         assert_eq!(ActionId::from_id("session"), Some(ActionId::Session));
         assert_eq!(ActionId::from_id("lock"), Some(ActionId::Lock));
         assert_eq!(ActionId::from_id("nightlight"), Some(ActionId::NightLight));
-        assert_eq!(ActionId::from_id("kitty_new_window"), Some(ActionId::KittyNewWindow { pid: 0 }));
+        assert_eq!(ActionId::from_id("kitty_new_window"), Some(ActionId::KittyNewWindow { pid: 0, title: String::new() }));
         assert_eq!(ActionId::from_id("kitty_agy"), Some(ActionId::KittyAgy));
         assert_eq!(ActionId::from_id("agy_terminal"), Some(ActionId::LaunchAgyTerminal));
         assert_eq!(ActionId::from_id("kitty_clear"), Some(ActionId::KittyClear));
-        assert_eq!(ActionId::from_id("kitty_dolphin"), Some(ActionId::KittyDolphin { pid: 0 }));
+        assert_eq!(ActionId::from_id("kitty_dolphin"), Some(ActionId::KittyDolphin { pid: 0, title: String::new() }));
         assert_eq!(ActionId::from_id("browsertabs"), Some(ActionId::BrowserTabs));
         assert_eq!(ActionId::from_id("browser_new_tab"), Some(ActionId::BrowserNewTab));
         assert_eq!(ActionId::from_id("browser_close_tab"), Some(ActionId::BrowserCloseTab));
@@ -1364,11 +1519,11 @@ mod tests {
         assert!(get_command(&ActionId::BrowserCloseTab).is_some());
         assert!(get_command(&ActionId::BrowserDupTab).is_some());
         assert!(get_command(&ActionId::BrowserReopenTab).is_some());
-        assert!(get_command(&ActionId::KittyNewWindow { pid: 0 }).is_some());
+        assert!(get_command(&ActionId::KittyNewWindow { pid: 0, title: String::new() }).is_some());
         assert!(get_command(&ActionId::KittyAgy).is_some());
         assert!(get_command(&ActionId::LaunchAgyTerminal).is_some());
         assert!(get_command(&ActionId::KittyClear).is_some());
-        assert!(get_command(&ActionId::KittyDolphin { pid: 0 }).is_some());
+        assert!(get_command(&ActionId::KittyDolphin { pid: 0, title: String::new() }).is_some());
         assert!(get_command(&ActionId::Scratchpad).is_some());
 
         // Dynamic actions
@@ -1467,9 +1622,18 @@ mod tests {
     #[test]
     fn test_resolve_terminal_cwd() {
         let current_pid = std::process::id() as i64;
-        let cwd = resolve_terminal_cwd(current_pid);
+        let cwd = resolve_terminal_cwd(current_pid, "");
         assert!(cwd.is_dir());
-        let fallback_cwd = resolve_terminal_cwd(999_999_999);
+        let fallback_cwd = resolve_terminal_cwd(999_999_999, "");
         assert!(fallback_cwd.is_dir());
+        let title_cwd = resolve_terminal_cwd(999_999_999, "~/Documents - fish");
+        assert!(title_cwd.is_dir());
+    }
+
+    #[test]
+    fn test_extract_path_from_title() {
+        assert!(extract_path_from_title("~/Documents - fish").is_some());
+        assert!(extract_path_from_title("~ - fish").is_some());
+        assert!(extract_path_from_title("nonexistent_random_xyz_title_12345").is_none());
     }
 }

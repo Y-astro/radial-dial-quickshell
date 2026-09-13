@@ -599,14 +599,20 @@ impl App {
             if customizer.mode.is_swap() {
                 let catalogue = state::actions::function_catalogue();
                 let items = customizer.filtered_catalogue(&catalogue);
-                let max_scroll = (items.len() as f32 * 56.0 - 368.0).max(0.0);
+                let max_scroll = (items.len() as f32 * 54.0 - 376.0).max(0.0);
                 customizer.scroll_offset = (customizer.scroll_offset + delta as f32 * 2.0).clamp(0.0, max_scroll);
                 self.dirty = true;
                 return;
             }
         }
         if let Some(folder_browser) = &mut self.folder_browser {
-            folder_browser.scroll_offset = (folder_browser.scroll_offset + delta as f32 * 2.0).max(0.0);
+            let folders = folder_browser.filtered_folders();
+            let card_h = 540.0_f32;
+            let list_y = 180.0_f32;
+            let bottom_bar_h = 64.0_f32;
+            let list_h = card_h - list_y - bottom_bar_h;
+            let max_scroll = (folders.len() as f32 * 38.0 - list_h + 8.0).max(0.0);
+            folder_browser.scroll_offset = (folder_browser.scroll_offset + delta as f32 * 2.0).clamp(0.0, max_scroll);
             self.dirty = true;
             return;
         }
@@ -1029,9 +1035,9 @@ impl App {
             }
         }
 
-        // Folder list items (y: card_y + 180.0 .. card_y + card_h - 54.0)
+        // Folder list items (y: card_y + 180.0 .. card_y + card_h - 64.0)
         let list_y = card_y + 180.0;
-        let bottom_bar_h = 54.0;
+        let bottom_bar_h = 64.0;
         let list_h = card_h - (list_y - card_y) - bottom_bar_h;
         if y >= list_y && y <= list_y + list_h && x >= card_x + margin && x <= card_x + card_w - margin {
             let item_step = 38.0;
@@ -1061,8 +1067,8 @@ impl App {
             }
         }
 
-        // Bottom Action buttons (bar_y: card_y + card_h - 44.0 .. card_y + card_h - 8.0)
-        let bar_y = card_y + card_h - 44.0;
+        // Bottom Action buttons (bar_y: card_y + card_h - 52.0 .. card_y + card_h - 16.0)
+        let bar_y = card_y + card_h - 52.0;
         let btn_h = 36.0;
         if y >= bar_y && y <= bar_y + btn_h {
             let cancel_w = 90.0;

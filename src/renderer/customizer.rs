@@ -6,8 +6,8 @@ use crate::renderer::text::{draw_icon, draw_text, draw_text_left};
 use crate::state::actions::ActionDef;
 use crate::state::config::FileJumpTarget;
 use tiny_skia::{
-    Color, FillRule, GradientStop, LinearGradient, Paint, PathBuilder, Pixmap, Point, SpreadMode,
-    Stroke, Transform,
+    Color, FillRule, GradientStop, LinearGradient, Paint, PathBuilder, Pixmap, PixmapPaint, Point,
+    SpreadMode, Stroke, Transform,
 };
 
 pub const CARD_W: f32 = 480.0;
@@ -801,7 +801,7 @@ fn render_slice_swap_body(
 
     // 3. Scrollable Catalogue Action List
     let list_y = card_y + 146.0;
-    let list_h = 376.0;
+    let list_h: f32 = 376.0;
     let filtered = state.filtered_catalogue(catalogue);
 
     // Build item list: each entry is (action_def, is_active)
@@ -825,207 +825,222 @@ fn render_slice_swap_body(
         }
     }
 
-    if ordered_items.is_empty() {
-        draw_text(
-            font_renderer,
-            pixmap,
-            "No matching functions found",
-            content_x + content_w / 2.0,
-            list_y + list_h / 2.0,
-            13.0,
-            colors.subtext,
-        );
-    } else {
-        let item_h = 50.0;
-        let item_gap = 4.0;
-        let step = item_h + item_gap;
-        let start_y = list_y - state.scroll_offset;
+    let vp_w = content_w.round() as u32;
+    let vp_h = list_h.round() as u32;
 
-        for (idx, (item, is_active)) in ordered_items.iter().enumerate() {
-            let cur_y = start_y + idx as f32 * step;
-
-            // Viewport bounds check: skip items completely outside list bounds
-            if cur_y + item_h < list_y || cur_y > list_y + list_h - 10.0 {
-                continue;
-            }
-
-            // Item card background - active items have subtle primary tint
-            if *is_active {
-                fill_rounded_rect(
-                    pixmap,
-                    content_x,
-                    cur_y,
-                    content_w,
-                    item_h,
-                    12.0,
-                    Color::from_rgba(colors.primary.red(), colors.primary.green(), colors.primary.blue(), 0.12)
-                        .unwrap_or(colors.primary),
-                );
-                stroke_rounded_rect(
-                    pixmap,
-                    content_x,
-                    cur_y,
-                    content_w,
-                    item_h,
-                    12.0,
-                    Color::from_rgba(colors.primary.red(), colors.primary.green(), colors.primary.blue(), 0.35)
-                        .unwrap_or(colors.primary),
-                    1.0,
-                );
-            } else {
-                fill_rounded_rect(
-                    pixmap,
-                    content_x,
-                    cur_y,
-                    content_w,
-                    item_h,
-                    12.0,
-                    Color::from_rgba8(0, 0, 0, 56),
-                );
-                stroke_rounded_rect(
-                    pixmap,
-                    content_x,
-                    cur_y,
-                    content_w,
-                    item_h,
-                    12.0,
-                    Color::from_rgba8(255, 255, 255, 20),
-                    1.0,
-                );
-            }
-
-            // Left icon box
-            let ib_x = content_x + 8.0;
-            let ib_y = cur_y + 8.0;
-            let ib_size = 34.0;
-            let ib_bg = if *is_active {
-                Color::from_rgba(colors.primary.red(), colors.primary.green(), colors.primary.blue(), 0.20)
-                    .unwrap_or(colors.primary)
-            } else {
-                Color::from_rgba8(255, 255, 255, 15)
-            };
-            fill_rounded_rect(pixmap, ib_x, ib_y, ib_size, ib_size, 10.0, ib_bg);
-
-            let icon_col = if *is_active { colors.primary } else { colors.on_surface };
-            draw_icon(
-                font_renderer,
-                pixmap,
-                item.icon,
-                ib_x + ib_size / 2.0,
-                ib_y + ib_size / 2.0,
-                20.0,
-                icon_col,
-            );
-
-            // Action Label and Description
-            let text_x = ib_x + ib_size + 10.0;
-            draw_text_left(
-                font_renderer,
-                pixmap,
-                item.label,
-                text_x,
-                cur_y + 16.0,
-                13.0,
-                colors.on_surface,
-            );
-
-            let desc = if item.desc.is_empty() { item.category } else { item.desc };
-            draw_text_left(
-                font_renderer,
-                pixmap,
-                desc,
-                text_x,
-                cur_y + 33.0,
-                10.0,
-                colors.subtext,
-            );
-
-            // Right action button
-            if *is_active {
-                // "Active" badge + red remove circle button
-                let badge_w = 64.0;
-                let badge_h = 22.0;
-                let badge_x = content_x + content_w - 46.0 - badge_w - 8.0;
-                let badge_y = cur_y + (item_h - badge_h) / 2.0;
-                fill_rounded_rect(
-                    pixmap,
-                    badge_x,
-                    badge_y,
-                    badge_w,
-                    badge_h,
-                    11.0,
-                    Color::from_rgba(colors.primary.red(), colors.primary.green(), colors.primary.blue(), 0.18)
-                        .unwrap_or(colors.primary),
-                );
-                stroke_rounded_rect(
-                    pixmap,
-                    badge_x,
-                    badge_y,
-                    badge_w,
-                    badge_h,
-                    11.0,
-                    Color::from_rgba(colors.primary.red(), colors.primary.green(), colors.primary.blue(), 0.5)
-                        .unwrap_or(colors.primary),
-                    1.0,
-                );
-                draw_icon(
-                    font_renderer,
-                    pixmap,
-                    "check_circle",
-                    badge_x + 14.0,
-                    badge_y + badge_h / 2.0,
-                    13.0,
-                    colors.primary,
-                );
-                draw_text_left(
-                    font_renderer,
-                    pixmap,
-                    "Active",
-                    badge_x + 24.0,
-                    badge_y + badge_h / 2.0,
-                    10.0,
-                    colors.primary,
-                );
-
-                // Red remove circle
-                let rm_r = 14.0;
-                let rm_cx = content_x + content_w - 10.0 - rm_r;
-                let rm_cy = cur_y + item_h / 2.0;
-                fill_rounded_rect(
-                    pixmap,
-                    rm_cx - rm_r,
-                    rm_cy - rm_r,
-                    rm_r * 2.0,
-                    rm_r * 2.0,
-                    rm_r,
-                    Color::from_rgba8(255, 80, 80, 200),
-                );
-                draw_icon(
-                    font_renderer,
-                    pixmap,
-                    "remove",
-                    rm_cx,
-                    rm_cy,
-                    14.0,
-                    Color::from_rgba8(255, 255, 255, 230),
-                );
-            } else {
-                // "+ Add" button
-                let btn_w = 64.0;
-                let btn_h = 26.0;
-                let btn_x = content_x + content_w - btn_w - 10.0;
-                let btn_y = cur_y + 12.0;
-                fill_rounded_rect(pixmap, btn_x, btn_y, btn_w, btn_h, 13.0, colors.primary);
+    if vp_w > 0 && vp_h > 0 {
+        if let Some(mut list_pixmap) = Pixmap::new(vp_w, vp_h) {
+            if ordered_items.is_empty() {
                 draw_text(
                     font_renderer,
-                    pixmap,
-                    "+ Add",
-                    btn_x + btn_w / 2.0,
-                    btn_y + btn_h / 2.0,
-                    10.0,
-                    colors.on_primary,
+                    &mut list_pixmap,
+                    "No matching functions found",
+                    content_w / 2.0,
+                    list_h / 2.0,
+                    13.0,
+                    colors.subtext,
                 );
+            } else {
+                let item_h = 50.0;
+                let item_gap = 4.0;
+                let step = item_h + item_gap;
+
+                for (idx, (item, is_active)) in ordered_items.iter().enumerate() {
+                    let cur_y = idx as f32 * step - state.scroll_offset;
+
+                    // Viewport bounds check: skip items completely outside list bounds
+                    if cur_y + item_h < 0.0 || cur_y > list_h {
+                        continue;
+                    }
+
+                    // Item card background - active items have subtle primary tint
+                    if *is_active {
+                        fill_rounded_rect(
+                            &mut list_pixmap,
+                            0.0,
+                            cur_y,
+                            content_w,
+                            item_h,
+                            12.0,
+                            Color::from_rgba(colors.primary.red(), colors.primary.green(), colors.primary.blue(), 0.12)
+                                .unwrap_or(colors.primary),
+                        );
+                        stroke_rounded_rect(
+                            &mut list_pixmap,
+                            0.0,
+                            cur_y,
+                            content_w,
+                            item_h,
+                            12.0,
+                            Color::from_rgba(colors.primary.red(), colors.primary.green(), colors.primary.blue(), 0.35)
+                                .unwrap_or(colors.primary),
+                            1.0,
+                        );
+                    } else {
+                        fill_rounded_rect(
+                            &mut list_pixmap,
+                            0.0,
+                            cur_y,
+                            content_w,
+                            item_h,
+                            12.0,
+                            Color::from_rgba8(0, 0, 0, 56),
+                        );
+                        stroke_rounded_rect(
+                            &mut list_pixmap,
+                            0.0,
+                            cur_y,
+                            content_w,
+                            item_h,
+                            12.0,
+                            Color::from_rgba8(255, 255, 255, 20),
+                            1.0,
+                        );
+                    }
+
+                    // Left icon box
+                    let ib_x = 8.0;
+                    let ib_y = cur_y + 8.0;
+                    let ib_size = 34.0;
+                    let ib_bg = if *is_active {
+                        Color::from_rgba(colors.primary.red(), colors.primary.green(), colors.primary.blue(), 0.20)
+                            .unwrap_or(colors.primary)
+                    } else {
+                        Color::from_rgba8(255, 255, 255, 15)
+                    };
+                    fill_rounded_rect(&mut list_pixmap, ib_x, ib_y, ib_size, ib_size, 10.0, ib_bg);
+
+                    let icon_col = if *is_active { colors.primary } else { colors.on_surface };
+                    draw_icon(
+                        font_renderer,
+                        &mut list_pixmap,
+                        item.icon,
+                        ib_x + ib_size / 2.0,
+                        ib_y + ib_size / 2.0,
+                        20.0,
+                        icon_col,
+                    );
+
+                    // Action Label and Description
+                    let text_x = ib_x + ib_size + 10.0;
+                    draw_text_left(
+                        font_renderer,
+                        &mut list_pixmap,
+                        item.label,
+                        text_x,
+                        cur_y + 16.0,
+                        13.0,
+                        colors.on_surface,
+                    );
+
+                    let desc = if item.desc.is_empty() { item.category } else { item.desc };
+                    draw_text_left(
+                        font_renderer,
+                        &mut list_pixmap,
+                        desc,
+                        text_x,
+                        cur_y + 33.0,
+                        10.0,
+                        colors.subtext,
+                    );
+
+                    // Right action button
+                    if *is_active {
+                        // "Active" badge + red remove circle button
+                        let badge_w = 64.0;
+                        let badge_h = 22.0;
+                        let badge_x = content_w - 46.0 - badge_w - 8.0;
+                        let badge_y = cur_y + (item_h - badge_h) / 2.0;
+                        fill_rounded_rect(
+                            &mut list_pixmap,
+                            badge_x,
+                            badge_y,
+                            badge_w,
+                            badge_h,
+                            11.0,
+                            Color::from_rgba(colors.primary.red(), colors.primary.green(), colors.primary.blue(), 0.18)
+                                .unwrap_or(colors.primary),
+                        );
+                        stroke_rounded_rect(
+                            &mut list_pixmap,
+                            badge_x,
+                            badge_y,
+                            badge_w,
+                            badge_h,
+                            11.0,
+                            Color::from_rgba(colors.primary.red(), colors.primary.green(), colors.primary.blue(), 0.5)
+                                .unwrap_or(colors.primary),
+                            1.0,
+                        );
+                        draw_icon(
+                            font_renderer,
+                            &mut list_pixmap,
+                            "check_circle",
+                            badge_x + 14.0,
+                            badge_y + badge_h / 2.0,
+                            13.0,
+                            colors.primary,
+                        );
+                        draw_text_left(
+                            font_renderer,
+                            &mut list_pixmap,
+                            "Active",
+                            badge_x + 24.0,
+                            badge_y + badge_h / 2.0,
+                            10.0,
+                            colors.primary,
+                        );
+
+                        // Red remove circle
+                        let rm_r = 14.0;
+                        let rm_cx = content_w - 10.0 - rm_r;
+                        let rm_cy = cur_y + item_h / 2.0;
+                        fill_rounded_rect(
+                            &mut list_pixmap,
+                            rm_cx - rm_r,
+                            rm_cy - rm_r,
+                            rm_r * 2.0,
+                            rm_r * 2.0,
+                            rm_r,
+                            Color::from_rgba8(255, 80, 80, 200),
+                        );
+                        draw_icon(
+                            font_renderer,
+                            &mut list_pixmap,
+                            "remove",
+                            rm_cx,
+                            rm_cy,
+                            14.0,
+                            Color::from_rgba8(255, 255, 255, 230),
+                        );
+                    } else {
+                        // "+ Add" button
+                        let btn_w = 64.0;
+                        let btn_h = 26.0;
+                        let btn_x = content_w - btn_w - 10.0;
+                        let btn_y = cur_y + 12.0;
+                        fill_rounded_rect(&mut list_pixmap, btn_x, btn_y, btn_w, btn_h, 13.0, colors.primary);
+                        draw_text(
+                            font_renderer,
+                            &mut list_pixmap,
+                            "+ Add",
+                            btn_x + btn_w / 2.0,
+                            btn_y + btn_h / 2.0,
+                            10.0,
+                            colors.on_primary,
+                        );
+                    }
+                }
             }
+
+            pixmap.draw_pixmap(
+                content_x.round() as i32,
+                list_y.round() as i32,
+                list_pixmap.as_ref(),
+                &PixmapPaint::default(),
+                Transform::identity(),
+                None,
+            );
         }
     }
 }

@@ -11,8 +11,8 @@ use crate::ipc::folder::{DirListing, FolderEntry, PlaceEntry};
 use crate::renderer::customizer::CustomizerColors;
 use crate::renderer::text::{draw_icon, draw_text, draw_text_left};
 use tiny_skia::{
-    Color, FillRule, GradientStop, LinearGradient, Paint, PathBuilder, Pixmap, Point, SpreadMode,
-    Stroke, Transform,
+    Color, FillRule, GradientStop, LinearGradient, Paint, PathBuilder, Pixmap, PixmapPaint, Point,
+    SpreadMode, Stroke, Transform,
 };
 
 #[derive(Debug, Clone, Default)]
@@ -614,7 +614,7 @@ pub fn render_folder_browser_with_font(
 
     // 7. Folders List / Grid Area
     let list_y = card_y + 180.0;
-    let bottom_bar_h = 54.0;
+    let bottom_bar_h = 64.0;
     let list_h = card_h - (list_y - card_y) - bottom_bar_h;
     let list_bg = Color::from_rgba8(0, 0, 0, 51);
     let list_border = Color::from_rgba(1.0, 1.0, 1.0, 0.10).unwrap_or(Color::WHITE);
@@ -630,97 +630,113 @@ pub fn render_folder_browser_with_font(
     );
 
     let folders = state.filtered_folders();
-    if folders.is_empty() {
-        // Empty state indicator
-        draw_icon(
-            font_renderer,
-            pixmap,
-            "folder_off",
-            card_x + card_w / 2.0,
-            list_y + list_h / 2.0 - 12.0,
-            32.0,
-            col_subtext,
-        );
-        let empty_msg = if state.search_query.is_empty() {
-            "No subfolders in this directory"
-        } else {
-            "No matching folders"
-        };
-        draw_text(
-            font_renderer,
-            pixmap,
-            empty_msg,
-            card_x + card_w / 2.0,
-            list_y + list_h / 2.0 + 16.0,
-            12.0,
-            col_subtext,
-        );
-    } else {
-        let item_h = 36.0;
-        let item_gap = 2.0;
-        let step = item_h + item_gap;
-        let inner_margin = 4.0;
-        let item_w = content_w - inner_margin * 2.0;
+    let vp_w = content_w.round() as u32;
+    let vp_h = list_h.round() as u32;
 
-        for (i, folder) in folders.iter().enumerate() {
-            let item_y = list_y + inner_margin + (i as f32 * step) - state.scroll_offset;
-            // Cull items outside the visible list bounds
-            if item_y + item_h < list_y || item_y > list_y + list_h - inner_margin {
-                continue;
-            }
-
-            let is_selected = i as i32 == state.selected_index;
-            let item_x = card_x + margin + inner_margin;
-
-            if is_selected {
-                let sel_bg = Color::from_rgba(col_primary.red(), col_primary.green(), col_primary.blue(), 0.22)
-                    .unwrap_or(col_primary);
-                let sel_border = Color::from_rgba(col_primary.red(), col_primary.green(), col_primary.blue(), 0.40)
-                    .unwrap_or(col_primary);
-                draw_rounded_rect(
-                    pixmap,
-                    item_x,
-                    item_y,
-                    item_w,
-                    item_h,
-                    8.0,
-                    sel_bg,
-                    Some((sel_border, 1.0)),
+    if vp_w > 0 && vp_h > 0 {
+        if let Some(mut list_pixmap) = Pixmap::new(vp_w, vp_h) {
+            if folders.is_empty() {
+                // Empty state indicator
+                draw_icon(
+                    font_renderer,
+                    &mut list_pixmap,
+                    "folder_off",
+                    content_w / 2.0,
+                    list_h / 2.0 - 12.0,
+                    32.0,
+                    col_subtext,
                 );
+                let empty_msg = if state.search_query.is_empty() {
+                    "No subfolders in this directory"
+                } else {
+                    "No matching folders"
+                };
+                draw_text(
+                    font_renderer,
+                    &mut list_pixmap,
+                    empty_msg,
+                    content_w / 2.0,
+                    list_h / 2.0 + 16.0,
+                    12.0,
+                    col_subtext,
+                );
+            } else {
+                let item_h = 36.0;
+                let item_gap = 2.0;
+                let step = item_h + item_gap;
+                let inner_margin = 4.0;
+                let item_w = content_w - inner_margin * 2.0;
+
+                for (i, folder) in folders.iter().enumerate() {
+                    let item_y = inner_margin + (i as f32 * step) - state.scroll_offset;
+                    // Cull items outside the visible list bounds
+                    if item_y + item_h < 0.0 || item_y > list_h {
+                        continue;
+                    }
+
+                    let is_selected = i as i32 == state.selected_index;
+                    let item_x = inner_margin;
+
+                    if is_selected {
+                        let sel_bg = Color::from_rgba(col_primary.red(), col_primary.green(), col_primary.blue(), 0.22)
+                            .unwrap_or(col_primary);
+                        let sel_border = Color::from_rgba(col_primary.red(), col_primary.green(), col_primary.blue(), 0.40)
+                            .unwrap_or(col_primary);
+                        draw_rounded_rect(
+                            &mut list_pixmap,
+                            item_x,
+                            item_y,
+                            item_w,
+                            item_h,
+                            8.0,
+                            sel_bg,
+                            Some((sel_border, 1.0)),
+                        );
+                    }
+
+                    draw_icon(
+                        font_renderer,
+                        &mut list_pixmap,
+                        "folder",
+                        item_x + 18.0,
+                        item_y + 18.0,
+                        18.0,
+                        col_primary,
+                    );
+                    draw_text_left(
+                        font_renderer,
+                        &mut list_pixmap,
+                        &folder.name,
+                        item_x + 36.0,
+                        item_y + 18.0,
+                        12.0,
+                        col_on_surface,
+                    );
+                    draw_icon(
+                        font_renderer,
+                        &mut list_pixmap,
+                        "chevron_right",
+                        item_x + item_w - 18.0,
+                        item_y + 18.0,
+                        16.0,
+                        if is_selected { col_primary } else { col_subtext },
+                    );
+                }
             }
 
-            draw_icon(
-                font_renderer,
-                pixmap,
-                "folder",
-                item_x + 18.0,
-                item_y + 18.0,
-                18.0,
-                col_primary,
-            );
-            draw_text_left(
-                font_renderer,
-                pixmap,
-                &folder.name,
-                item_x + 36.0,
-                item_y + 18.0,
-                12.0,
-                col_on_surface,
-            );
-            draw_icon(
-                font_renderer,
-                pixmap,
-                "chevron_right",
-                item_x + item_w - 18.0,
-                item_y + 18.0,
-                16.0,
-                if is_selected { col_primary } else { col_subtext },
+            pixmap.draw_pixmap(
+                (card_x + margin).round() as i32,
+                list_y.round() as i32,
+                list_pixmap.as_ref(),
+                &PixmapPaint::default(),
+                Transform::identity(),
+                None,
             );
         }
     }
 
     // 8. Bottom Action Bar
-    let bar_y = card_y + card_h - 44.0;
+    let bar_y = card_y + card_h - 52.0;
 
     // Cancel Button
     let cancel_w = 90.0;

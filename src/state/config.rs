@@ -318,6 +318,15 @@ impl RadialConfig {
         }
     }
 
+    /// Insert a slice at index for given context
+    pub fn insert_slice(&mut self, context: &str, index: usize, function_id: &str) {
+        let slices = self.slices_mut(context);
+        if !slices.contains(&function_id.to_string()) {
+            let idx = index.min(slices.len());
+            slices.insert(idx, function_id.to_string());
+        }
+    }
+
     /// Remove a slice from dial (min 2 slices enforced)
     pub fn remove_slice(&mut self, context: &str, function_id: &str) {
         let slices = self.slices_mut(context);
@@ -510,6 +519,30 @@ mod tests {
         let len = cfg.kitty_slices.len();
         cfg.swap_slice("kitty", len + 10, "appended_action");
         assert_eq!(cfg.kitty_slices.last().unwrap(), "appended_action");
+    }
+
+    #[test]
+    fn test_insert_slice() {
+        let mut cfg = RadialConfig::default();
+        let orig_len = cfg.kitty_slices.len();
+        // Insert at beginning
+        cfg.insert_slice("kitty", 0, "first_action");
+        assert_eq!(cfg.kitty_slices[0], "first_action");
+        assert_eq!(cfg.kitty_slices.len(), orig_len + 1);
+
+        // Insert at middle
+        cfg.insert_slice("kitty", 2, "mid_action");
+        assert_eq!(cfg.kitty_slices[2], "mid_action");
+
+        // Insert out of bounds appends at end
+        let cur_len = cfg.kitty_slices.len();
+        cfg.insert_slice("kitty", cur_len + 10, "last_action");
+        assert_eq!(cfg.kitty_slices.last().unwrap(), "last_action");
+
+        // Duplicate is not inserted
+        let before_dup = cfg.kitty_slices.clone();
+        cfg.insert_slice("kitty", 0, "first_action");
+        assert_eq!(cfg.kitty_slices, before_dup);
     }
 
     #[test]

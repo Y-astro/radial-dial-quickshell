@@ -97,6 +97,7 @@ impl Default for CustomizerColors {
 #[derive(Debug, Clone, PartialEq)]
 pub enum CustomizerMode {
     SliceSwap { slot_index: usize },
+    SelectPosition { action_id: String, is_replace_mode: bool },
     FileTargetEdit { target_index: usize },
     FileTargetAdd,
 }
@@ -104,6 +105,10 @@ pub enum CustomizerMode {
 impl CustomizerMode {
     pub fn is_swap(&self) -> bool {
         matches!(self, CustomizerMode::SliceSwap { .. })
+    }
+
+    pub fn is_select_position(&self) -> bool {
+        matches!(self, CustomizerMode::SelectPosition { .. })
     }
 
     pub fn is_file_edit(&self) -> bool {
@@ -168,6 +173,16 @@ impl CustomizerState {
         self.selected_item = None;
         self.anim_elapsed = 0.0;
         self.anim_progress = 0.0;
+    }
+
+    pub fn open_select_position(&mut self, action_id: &str, is_replace_mode: bool) {
+        self.mode = CustomizerMode::SelectPosition {
+            action_id: action_id.to_string(),
+            is_replace_mode,
+        };
+        self.scroll_offset = 0.0;
+        self.search_focused = false;
+        self.is_open = true;
     }
 
     pub fn open_file_edit(&mut self, target_index: usize, label: &str, path: &str, icon: &str) {
@@ -487,6 +502,26 @@ pub fn render_customizer_with_font(
                 slot_index + 1
             ),
         ),
+        CustomizerMode::SelectPosition { action_id, is_replace_mode } => {
+            let label = catalogue
+                .iter()
+                .find(|d| d.id == action_id.as_str())
+                .map(|d| d.label)
+                .unwrap_or(action_id.as_str());
+            if *is_replace_mode {
+                (
+                    "arrow_back",
+                    "Replace Dial Slice",
+                    format!("Choose which slice to replace with \"{}\"", label),
+                )
+            } else {
+                (
+                    "arrow_back",
+                    "Select Dial Position",
+                    format!("Choose where to place \"{}\" on the dial", label),
+                )
+            }
+        }
         CustomizerMode::FileTargetEdit { target_index } => (
             "edit",
             "Edit Folder Target",
@@ -597,21 +632,28 @@ pub fn render_customizer_with_font(
             colors.subtext,
         );
     }
-    draw_icon(
-        font_renderer,
-        pixmap,
-        "close",
-        close_x + close_size / 2.0,
-        close_y + close_size / 2.0,
-        18.0,
-        colors.on_surface,
-    );
 
     // 4. Body Content per Mode
     match &state.mode {
         CustomizerMode::SliceSwap { .. } => {
             render_slice_swap_body(
                 state,
+                catalogue,
+                active_slice_ids,
+                content_x,
+                card_y,
+                content_w,
+                card_h,
+                pixmap,
+                font_renderer,
+                colors,
+            );
+        }
+        CustomizerMode::SelectPosition { action_id, is_replace_mode } => {
+            render_select_position_body(
+                state,
+                action_id,
+                *is_replace_mode,
                 catalogue,
                 active_slice_ids,
                 content_x,
@@ -1030,6 +1072,405 @@ fn render_slice_swap_body(
                             colors.on_primary,
                         );
                     }
+                }
+            }
+
+            pixmap.draw_pixmap(
+                content_x.round() as i32,
+                list_y.round() as i32,
+                list_pixmap.as_ref(),
+                &PixmapPaint::default(),
+                Transform::identity(),
+                None,
+            );
+        }
+    }
+}
+
+/// Render SelectPosition mode body:
+/// Tabs ("Insert as New Slice", "Replace Existing Slice"), hint message, and scrollable slot choices list.
+fn render_select_position_body(
+    state: &CustomizerState,
+    action_id: &str,
+    is_replace_mode: bool,
+    catalogue: &[ActionDef],
+    active_slice_ids: &[String],
+    content_x: f32,
+    card_y: f32,
+    content_w: f32,
+    _card_h: f32,
+    pixmap: &mut Pixmap,
+    font_renderer: &mut FontRenderer,
+    colors: CustomizerColors,
+) {
+    let new_action_label = catalogue
+        .iter()
+        .find(|d| d.id == action_id)
+        .map(|d| d.label)
+        .unwrap_or(action_id);
+
+    // 1. Mode Switcher Tabs (Insert vs Replace)
+    let tabs_y = card_y + 66.0;
+    let tab_h = 28.0;
+    let tab_gap = 8.0;
+    let tab_w = (content_w - tab_gap) / 2.0;
+
+    // Tab 0: Insert as New Slice
+    let tx0 = content_x;
+    if !is_replace_mode {
+        fill_rounded_rect(pixmap, tx0, tabs_y, tab_w, tab_h, 14.0, colors.primary);
+        draw_text(
+            font_renderer,
+            pixmap,
+            "+ Insert as New Slice",
+            tx0 + tab_w / 2.0,
+            tabs_y + tab_h / 2.0,
+            11.5,
+            colors.on_primary,
+        );
+    } else {
+        fill_rounded_rect(
+            pixmap,
+            tx0,
+            tabs_y,
+            tab_w,
+            tab_h,
+            14.0,
+            Color::from_rgba8(255, 255, 255, 13),
+        );
+        stroke_rounded_rect(
+            pixmap,
+            tx0,
+            tabs_y,
+            tab_w,
+            tab_h,
+            14.0,
+            Color::from_rgba8(255, 255, 255, 30),
+            1.0,
+        );
+        draw_text(
+            font_renderer,
+            pixmap,
+            "+ Insert as New Slice",
+            tx0 + tab_w / 2.0,
+            tabs_y + tab_h / 2.0,
+            11.5,
+            colors.on_surface,
+        );
+    }
+
+    // Tab 1: Replace Existing Slice
+    let tx1 = content_x + tab_w + tab_gap;
+    if is_replace_mode {
+        fill_rounded_rect(pixmap, tx1, tabs_y, tab_w, tab_h, 14.0, colors.primary);
+        draw_text(
+            font_renderer,
+            pixmap,
+            "Replace Existing Slice",
+            tx1 + tab_w / 2.0,
+            tabs_y + tab_h / 2.0,
+            11.5,
+            colors.on_primary,
+        );
+    } else {
+        fill_rounded_rect(
+            pixmap,
+            tx1,
+            tabs_y,
+            tab_w,
+            tab_h,
+            14.0,
+            Color::from_rgba8(255, 255, 255, 13),
+        );
+        stroke_rounded_rect(
+            pixmap,
+            tx1,
+            tabs_y,
+            tab_w,
+            tab_h,
+            14.0,
+            Color::from_rgba8(255, 255, 255, 30),
+            1.0,
+        );
+        draw_text(
+            font_renderer,
+            pixmap,
+            "Replace Existing Slice",
+            tx1 + tab_w / 2.0,
+            tabs_y + tab_h / 2.0,
+            11.5,
+            colors.on_surface,
+        );
+    }
+
+    // 2. Section Subtitle / Hint
+    let hint_y = card_y + 106.0;
+    let hint_text = if !is_replace_mode {
+        "Choose where to insert on the radial menu:"
+    } else {
+        "Choose an existing slice to replace:"
+    };
+    draw_text_left(
+        font_renderer,
+        pixmap,
+        hint_text,
+        content_x + 4.0,
+        hint_y,
+        11.0,
+        colors.subtext,
+    );
+
+    // 3. Scrollable Choices List
+    let list_y = card_y + 124.0;
+    let list_h: f32 = 396.0;
+    let vp_w = content_w.round() as u32;
+    let vp_h = list_h.round() as u32;
+
+    if vp_w > 0 && vp_h > 0 {
+        if let Some(mut list_pixmap) = Pixmap::new(vp_w, vp_h) {
+            let item_h = 50.0;
+            let item_gap = 6.0;
+            let step = item_h + item_gap;
+
+            // Helper to get slice label and icon
+            let get_slice_info = |id: &str| -> (String, String) {
+                if let Some(def) = catalogue.iter().find(|d| d.id == id) {
+                    (def.label.to_string(), def.icon.to_string())
+                } else {
+                    (id.to_string(), "extension".to_string())
+                }
+            };
+
+            if !is_replace_mode {
+                // Insert Mode: active_slice_ids.len() + 1 insertion positions
+                let total_positions = active_slice_ids.len() + 1;
+
+                for slot_idx in 0..total_positions {
+                    let cur_y = slot_idx as f32 * step - state.scroll_offset;
+                    if cur_y + item_h < 0.0 || cur_y > list_h {
+                        continue;
+                    }
+
+                    // Card background
+                    fill_rounded_rect(
+                        &mut list_pixmap,
+                        0.0,
+                        cur_y,
+                        content_w,
+                        item_h,
+                        12.0,
+                        Color::from_rgba8(0, 0, 0, 56),
+                    );
+                    stroke_rounded_rect(
+                        &mut list_pixmap,
+                        0.0,
+                        cur_y,
+                        content_w,
+                        item_h,
+                        12.0,
+                        Color::from_rgba8(255, 255, 255, 20),
+                        1.0,
+                    );
+
+                    // Left icon box
+                    let ib_x = 8.0;
+                    let ib_y = cur_y + 8.0;
+                    let ib_size = 34.0;
+                    fill_rounded_rect(
+                        &mut list_pixmap,
+                        ib_x,
+                        ib_y,
+                        ib_size,
+                        ib_size,
+                        10.0,
+                        Color::from_rgba(
+                            colors.primary.red(),
+                            colors.primary.green(),
+                            colors.primary.blue(),
+                            0.18,
+                        )
+                        .unwrap_or(colors.primary),
+                    );
+                    draw_icon(
+                        font_renderer,
+                        &mut list_pixmap,
+                        "add",
+                        ib_x + ib_size / 2.0,
+                        ib_y + ib_size / 2.0,
+                        18.0,
+                        colors.primary,
+                    );
+
+                    // Text
+                    let text_x = ib_x + ib_size + 12.0;
+                    let (title, subtitle) = if active_slice_ids.is_empty() {
+                        ("Position 1 • First Slice".to_string(), "Add to empty dial".to_string())
+                    } else if slot_idx == 0 {
+                        let (first_label, _) = get_slice_info(&active_slice_ids[0]);
+                        (
+                            "Position 1 • At Beginning".to_string(),
+                            format!("Insert before \"{}\"", first_label),
+                        )
+                    } else if slot_idx == active_slice_ids.len() {
+                        let (last_label, _) = get_slice_info(&active_slice_ids[slot_idx - 1]);
+                        (
+                            format!("Position {} • At End", slot_idx + 1),
+                            format!("Insert after \"{}\"", last_label),
+                        )
+                    } else {
+                        let (prev_label, _) = get_slice_info(&active_slice_ids[slot_idx - 1]);
+                        let (next_label, _) = get_slice_info(&active_slice_ids[slot_idx]);
+                        (
+                            format!("Position {} • Between Slices", slot_idx + 1),
+                            format!("Between \"{}\" and \"{}\"", prev_label, next_label),
+                        )
+                    };
+
+                    draw_text_left(
+                        font_renderer,
+                        &mut list_pixmap,
+                        &title,
+                        text_x,
+                        cur_y + 16.0,
+                        12.5,
+                        colors.on_surface,
+                    );
+                    draw_text_left(
+                        font_renderer,
+                        &mut list_pixmap,
+                        &subtitle,
+                        text_x,
+                        cur_y + 33.0,
+                        10.0,
+                        colors.subtext,
+                    );
+
+                    // Right "+ Insert" button
+                    let btn_w = 72.0;
+                    let btn_h = 26.0;
+                    let btn_x = content_w - btn_w - 10.0;
+                    let btn_y = cur_y + 12.0;
+                    fill_rounded_rect(
+                        &mut list_pixmap,
+                        btn_x,
+                        btn_y,
+                        btn_w,
+                        btn_h,
+                        13.0,
+                        colors.primary,
+                    );
+                    draw_text(
+                        font_renderer,
+                        &mut list_pixmap,
+                        "+ Insert",
+                        btn_x + btn_w / 2.0,
+                        btn_y + btn_h / 2.0,
+                        10.5,
+                        colors.on_primary,
+                    );
+                }
+            } else {
+                // Replace Mode: active_slice_ids.len() existing slices
+                for (slot_idx, id) in active_slice_ids.iter().enumerate() {
+                    let cur_y = slot_idx as f32 * step - state.scroll_offset;
+                    if cur_y + item_h < 0.0 || cur_y > list_h {
+                        continue;
+                    }
+
+                    let (cur_label, cur_icon) = get_slice_info(id);
+
+                    // Card background
+                    fill_rounded_rect(
+                        &mut list_pixmap,
+                        0.0,
+                        cur_y,
+                        content_w,
+                        item_h,
+                        12.0,
+                        Color::from_rgba8(0, 0, 0, 56),
+                    );
+                    stroke_rounded_rect(
+                        &mut list_pixmap,
+                        0.0,
+                        cur_y,
+                        content_w,
+                        item_h,
+                        12.0,
+                        Color::from_rgba8(255, 255, 255, 20),
+                        1.0,
+                    );
+
+                    // Left icon box
+                    let ib_x = 8.0;
+                    let ib_y = cur_y + 8.0;
+                    let ib_size = 34.0;
+                    fill_rounded_rect(
+                        &mut list_pixmap,
+                        ib_x,
+                        ib_y,
+                        ib_size,
+                        ib_size,
+                        10.0,
+                        Color::from_rgba8(255, 255, 255, 15),
+                    );
+                    draw_icon(
+                        font_renderer,
+                        &mut list_pixmap,
+                        &cur_icon,
+                        ib_x + ib_size / 2.0,
+                        ib_y + ib_size / 2.0,
+                        20.0,
+                        colors.on_surface,
+                    );
+
+                    // Text
+                    let text_x = ib_x + ib_size + 12.0;
+                    let title = format!("Slot {} • Replace \"{}\"", slot_idx + 1, cur_label);
+                    let subtitle = format!("Replace with \"{}\"", new_action_label);
+
+                    draw_text_left(
+                        font_renderer,
+                        &mut list_pixmap,
+                        &title,
+                        text_x,
+                        cur_y + 16.0,
+                        12.5,
+                        colors.on_surface,
+                    );
+                    draw_text_left(
+                        font_renderer,
+                        &mut list_pixmap,
+                        &subtitle,
+                        text_x,
+                        cur_y + 33.0,
+                        10.0,
+                        colors.subtext,
+                    );
+
+                    // Right "Replace" button
+                    let btn_w = 72.0;
+                    let btn_h = 26.0;
+                    let btn_x = content_w - btn_w - 10.0;
+                    let btn_y = cur_y + 12.0;
+                    let replace_btn_col = Color::from_rgba8(240, 160, 60, 230); // Warm amber
+                    fill_rounded_rect(
+                        &mut list_pixmap,
+                        btn_x,
+                        btn_y,
+                        btn_w,
+                        btn_h,
+                        13.0,
+                        replace_btn_col,
+                    );
+                    draw_text(
+                        font_renderer,
+                        &mut list_pixmap,
+                        "Replace",
+                        btn_x + btn_w / 2.0,
+                        btn_y + btn_h / 2.0,
+                        10.5,
+                        Color::from_rgba8(20, 20, 20, 255),
+                    );
                 }
             }
 
@@ -1567,6 +2008,35 @@ mod tests {
             "FileTargetAdd mode should render fields and buttons, got {}",
             non_zero_add
         );
+
+        // 5. Test SelectPosition mode rendering (Insert mode)
+        let mut pixmap_pos = Pixmap::new(800, 600).unwrap();
+        state.mode = CustomizerMode::SelectPosition {
+            action_id: "calc".to_string(),
+            is_replace_mode: false,
+        };
+        let active_slices = vec!["terminal".to_string(), "editor".to_string()];
+        render_customizer(&state, &catalogue, &active_slices, &mut pixmap_pos, 800.0, 600.0, 400.0, 300.0);
+        let non_zero_pos = pixmap_pos.pixels().iter().filter(|p| p.alpha() > 0).count();
+        assert!(
+            non_zero_pos > 1000,
+            "SelectPosition mode (insert) should render slots, got {}",
+            non_zero_pos
+        );
+
+        // 6. Test SelectPosition mode rendering (Replace mode)
+        let mut pixmap_repl = Pixmap::new(800, 600).unwrap();
+        state.mode = CustomizerMode::SelectPosition {
+            action_id: "calc".to_string(),
+            is_replace_mode: true,
+        };
+        render_customizer(&state, &catalogue, &active_slices, &mut pixmap_repl, 800.0, 600.0, 400.0, 300.0);
+        let non_zero_repl = pixmap_repl.pixels().iter().filter(|p| p.alpha() > 0).count();
+        assert!(
+            non_zero_repl > 1000,
+            "SelectPosition mode (replace) should render slots, got {}",
+            non_zero_repl
+        );
     }
 
     #[test]
@@ -1577,6 +2047,17 @@ mod tests {
         state.open_slice_swap(3);
         assert!(state.is_open);
         assert_eq!(state.mode, CustomizerMode::SliceSwap { slot_index: 3 });
+
+        state.open_select_position("kitty_agy", false);
+        assert!(state.is_open);
+        assert_eq!(
+            state.mode,
+            CustomizerMode::SelectPosition {
+                action_id: "kitty_agy".to_string(),
+                is_replace_mode: false,
+            }
+        );
+        assert!(state.mode.is_select_position());
 
         let target = FileJumpTarget {
             id: "docs".to_string(),
@@ -1597,6 +2078,18 @@ mod tests {
         assert!(state.input_label.is_empty());
         assert!(state.input_path.is_empty());
         assert_eq!(state.input_icon, "folder");
+
+        // Test mode toggle to replace mode and back to swap
+        state.open_select_position("kitty_agy", true);
+        assert_eq!(
+            state.mode,
+            CustomizerMode::SelectPosition {
+                action_id: "kitty_agy".to_string(),
+                is_replace_mode: true,
+            }
+        );
+        state.mode = CustomizerMode::SliceSwap { slot_index: 0 };
+        assert!(state.mode.is_swap());
 
         state.close();
         assert!(!state.is_open);

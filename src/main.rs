@@ -604,6 +604,21 @@ impl App {
                 self.dirty = true;
                 return;
             }
+            if customizer.mode.is_select_position() {
+                let count = if let CustomizerMode::SelectPosition { is_replace_mode, .. } = &customizer.mode {
+                    if *is_replace_mode {
+                        self.menu.current_slices.len()
+                    } else {
+                        self.menu.current_slices.len() + 1
+                    }
+                } else {
+                    0
+                };
+                let max_scroll = (count as f32 * 56.0 - 396.0).max(0.0);
+                customizer.scroll_offset = (customizer.scroll_offset + delta as f32 * 2.0).clamp(0.0, max_scroll);
+                self.dirty = true;
+                return;
+            }
         }
         if let Some(folder_browser) = &mut self.folder_browser {
             let folders = folder_browser.filtered_folders();
@@ -664,6 +679,21 @@ impl App {
             None => return,
         };
 
+        // Back button (left icon box) when in SelectPosition mode
+        if mode.is_select_position() {
+            let icon_box_x = content_x;
+            let icon_box_y = card_y + 16.0;
+            let icon_box_size = 38.0;
+            if x >= icon_box_x && x <= icon_box_x + icon_box_size && y >= icon_box_y && y <= icon_box_y + icon_box_size {
+                if let Some(c) = &mut self.customizer {
+                    c.mode = CustomizerMode::SliceSwap { slot_index: 0 };
+                    c.scroll_offset = 0.0;
+                }
+                self.dirty = true;
+                return;
+            }
+        }
+
         // Reset to Defaults button (in header, next to close button)
         if mode.is_swap() {
             let reset_x = close_x - 38.0;
@@ -679,7 +709,7 @@ impl App {
         }
 
         match mode {
-            CustomizerMode::SliceSwap { slot_index } => {
+            CustomizerMode::SliceSwap { slot_index: _ } => {
                 // Category tabs (y: card_y + 66.0 .. card_y + 92.0)
                 let tabs_y = card_y + 66.0;
                 let tab_h = 26.0;
@@ -772,8 +802,85 @@ impl App {
                                         return;
                                     }
                                 } else {
-                                    // Inactive: swap into the target slot
-                                    self.menu.config.swap_slice(&self.menu.context.to_string(), slot_index, item_id);
+                                    // Inactive: open SelectPosition mode so user can choose insertion position or replacement
+                                    if let Some(c) = &mut self.customizer {
+                                        c.open_select_position(item_id, false);
+                                    }
+                                    self.dirty = true;
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            CustomizerMode::SelectPosition { action_id, is_replace_mode } => {
+                // 1. Mode Switcher Tabs (y: card_y + 66.0 .. card_y + 94.0)
+                let tabs_y = card_y + 66.0;
+                let tab_h = 28.0;
+                let tab_gap = 8.0;
+                let tab_w = (content_w - tab_gap) / 2.0;
+
+                if y >= tabs_y && y <= tabs_y + tab_h {
+                    // Tab 0: Insert as New Slice
+                    if x >= content_x && x <= content_x + tab_w {
+                        if is_replace_mode {
+                            if let Some(c) = &mut self.customizer {
+                                c.mode = CustomizerMode::SelectPosition {
+                                    action_id: action_id.clone(),
+                                    is_replace_mode: false,
+                                };
+                                c.scroll_offset = 0.0;
+                            }
+                            self.dirty = true;
+                        }
+                        return;
+                    }
+                    // Tab 1: Replace Existing Slice
+                    if x >= content_x + tab_w + tab_gap && x <= content_x + content_w {
+                        if !is_replace_mode {
+                            if let Some(c) = &mut self.customizer {
+                                c.mode = CustomizerMode::SelectPosition {
+                                    action_id: action_id.clone(),
+                                    is_replace_mode: true,
+                                };
+                                c.scroll_offset = 0.0;
+                            }
+                            self.dirty = true;
+                        }
+                        return;
+                    }
+                }
+
+                // 2. Choice List Items (y: card_y + 124.0 .. card_y + 520.0)
+                let list_y = card_y + 124.0;
+                let list_h = 396.0;
+                if y >= list_y && y <= list_y + list_h && x >= content_x && x <= content_x + content_w {
+                    let item_h = 50.0;
+                    let item_gap = 6.0;
+                    let step = item_h + item_gap;
+                    let scroll_offset = self.customizer.as_ref().map(|c| c.scroll_offset).unwrap_or(0.0);
+                    let rel_y = y - (list_y - scroll_offset);
+                    if rel_y >= 0.0 {
+                        let idx = (rel_y / step) as usize;
+                        let offset_in_item = rel_y % step;
+                        if offset_in_item <= item_h {
+                            if !is_replace_mode {
+                                let total_positions = self.menu.current_slices.len() + 1;
+                                if idx < total_positions {
+                                    self.menu.config.insert_slice(&self.menu.context.to_string(), idx, &action_id);
+                                    let _ = self.menu.config.save();
+                                    self.menu.refresh_current_slices();
+                                    self.customizer = None;
+                                    self.seat_handler.customizer_open = false;
+                                    self.dirty = true;
+                                    return;
+                                }
+                            } else {
+                                let total_positions = self.menu.current_slices.len();
+                                if idx < total_positions {
+                                    self.menu.config.swap_slice(&self.menu.context.to_string(), idx, &action_id);
                                     let _ = self.menu.config.save();
                                     self.menu.refresh_current_slices();
                                     self.customizer = None;
@@ -1142,8 +1249,14 @@ impl App {
         }
 
         if let Some(customizer) = &mut self.customizer {
-            // 1. Escape: close customizer modal or clear search query
+            // 1. Escape: close customizer modal or clear search query / return from select position
             if is_escape(keysym) {
+                if customizer.mode.is_select_position() {
+                    customizer.mode = CustomizerMode::SliceSwap { slot_index: 0 };
+                    customizer.scroll_offset = 0.0;
+                    self.dirty = true;
+                    return true;
+                }
                 if customizer.mode.is_swap() && !customizer.search_query.is_empty() {
                     customizer.search_query.clear();
                     customizer.scroll_offset = 0.0;
@@ -1165,9 +1278,12 @@ impl App {
                 }
             }
 
-            // 3. Backspace: delete character
+            // 3. Backspace: delete character or return from select position
             if keysym == 0xff08 || keysym == 8 {
-                if customizer.mode.is_swap() {
+                if customizer.mode.is_select_position() {
+                    customizer.mode = CustomizerMode::SliceSwap { slot_index: 0 };
+                    customizer.scroll_offset = 0.0;
+                } else if customizer.mode.is_swap() {
                     customizer.search_query.pop();
                     customizer.scroll_offset = 0.0;
                 } else if customizer.focused_field == 0 {
@@ -1214,7 +1330,33 @@ impl App {
             // 5. Printable characters
             if let Some(ch) = keysym_to_char(keysym) {
                 if !ch.is_control() {
-                    if customizer.mode.is_swap() {
+                    if customizer.mode.is_select_position() {
+                        if ch.is_ascii_digit() && ch != '0' {
+                            let slot_num = ch.to_digit(10).unwrap() as usize;
+                            let target_idx = slot_num - 1;
+                            if let CustomizerMode::SelectPosition { action_id, is_replace_mode } = &customizer.mode {
+                                let act_id = action_id.clone();
+                                let replace = *is_replace_mode;
+                                if !replace && target_idx <= self.menu.current_slices.len() {
+                                    self.menu.config.insert_slice(&self.menu.context.to_string(), target_idx, &act_id);
+                                    let _ = self.menu.config.save();
+                                    self.menu.refresh_current_slices();
+                                    self.customizer = None;
+                                    self.seat_handler.customizer_open = false;
+                                    self.dirty = true;
+                                    return true;
+                                } else if replace && target_idx < self.menu.current_slices.len() {
+                                    self.menu.config.swap_slice(&self.menu.context.to_string(), target_idx, &act_id);
+                                    let _ = self.menu.config.save();
+                                    self.menu.refresh_current_slices();
+                                    self.customizer = None;
+                                    self.seat_handler.customizer_open = false;
+                                    self.dirty = true;
+                                    return true;
+                                }
+                            }
+                        }
+                    } else if customizer.mode.is_swap() {
                         customizer.search_query.push(ch);
                         customizer.search_focused = true;
                         customizer.scroll_offset = 0.0;
@@ -1278,11 +1420,13 @@ impl App {
             let content_w = card_w - 36.0;
 
             if c.mode.is_swap() {
-                let search_y = card_y + 90.0;
-                let search_h = 38.0;
+                let search_y = card_y + 102.0;
+                let search_h = 34.0;
                 if y >= search_y && y <= search_y + search_h && x >= content_x && x <= content_x + content_w {
                     return true;
                 }
+            } else if c.mode.is_select_position() {
+                return false;
             } else {
                 let label_box_y = card_y + 84.0;
                 let label_box_h = 38.0;

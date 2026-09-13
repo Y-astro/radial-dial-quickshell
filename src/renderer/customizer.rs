@@ -134,9 +134,12 @@ pub struct CustomizerState {
     pub input_path: String,
     pub input_icon: String,
     pub focused_field: usize, // 0=label, 1=path, 2=icon
-    // Opening animation state (180ms OutCubic)
+    // Opening animation state (160ms OutBack(1.1))
     pub anim_elapsed: f32,
     pub anim_progress: f32,
+    /// Phase 4: modal close animation (120ms InBack(0.9))
+    pub is_closing: bool,
+    pub close_elapsed: f32,
 }
 
 impl Default for CustomizerState {
@@ -155,6 +158,8 @@ impl Default for CustomizerState {
             focused_field: 0,
             anim_elapsed: 0.0,
             anim_progress: 0.0,
+            is_closing: false,
+            close_elapsed: 0.0,
         }
     }
 }
@@ -167,6 +172,8 @@ impl CustomizerState {
     pub fn open_slice_swap(&mut self, slot_index: usize) {
         self.mode = CustomizerMode::SliceSwap { slot_index };
         self.is_open = true;
+        self.is_closing = false;
+        self.close_elapsed = 0.0;
         self.search_query.clear();
         self.search_focused = false;
         self.scroll_offset = 0.0;
@@ -183,6 +190,8 @@ impl CustomizerState {
         self.scroll_offset = 0.0;
         self.search_focused = false;
         self.is_open = true;
+        self.is_closing = false;
+        self.close_elapsed = 0.0;
     }
 
     pub fn open_file_edit(&mut self, target_index: usize, label: &str, path: &str, icon: &str) {
@@ -198,6 +207,8 @@ impl CustomizerState {
         self.search_focused = false;
         self.anim_elapsed = 0.0;
         self.anim_progress = 0.0;
+        self.is_closing = false;
+        self.close_elapsed = 0.0;
         self.is_open = true;
     }
 
@@ -214,11 +225,22 @@ impl CustomizerState {
         self.search_focused = false;
         self.anim_elapsed = 0.0;
         self.anim_progress = 0.0;
+        self.is_closing = false;
+        self.close_elapsed = 0.0;
         self.is_open = true;
+    }
+
+    /// Begins the modal close animation. Caller must check `is_closing` and remove when done.
+    pub fn begin_close(&mut self) {
+        if !self.is_closing {
+            self.is_closing = true;
+            self.close_elapsed = 0.0;
+        }
     }
 
     pub fn close(&mut self) {
         self.is_open = false;
+        self.is_closing = false;
     }
 
     pub fn filtered_catalogue<'a>(&self, catalogue: &'a [ActionDef]) -> Vec<&'a ActionDef> {

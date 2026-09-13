@@ -504,7 +504,9 @@ impl App {
         if self.folder_browser.is_some() {
             self.modal_click_active = true;
             if is_right_button(button) {
-                self.folder_browser = None;
+                if let Some(fb) = &mut self.folder_browser {
+                    fb.begin_close(); // Phase 4: animate out
+                }
                 self.dirty = true;
                 return;
             }
@@ -519,7 +521,9 @@ impl App {
         if self.customizer.is_some() {
             self.modal_click_active = true;
             if is_right_button(button) {
-                self.customizer = None;
+                if let Some(c) = &mut self.customizer {
+                    c.begin_close(); // Phase 4: animate out
+                }
                 self.seat_handler.customizer_open = false;
                 self.dirty = true;
                 return;
@@ -672,9 +676,11 @@ impl App {
         let card_x = preferred_x.clamp(10.0, w - card_w - 10.0);
         let card_y = preferred_y.clamp(10.0, h - card_h - 10.0);
 
-        // 1. Outside card -> close customizer
+        // 1. Outside card -> begin close animation
         if x < card_x || x > card_x + card_w || y < card_y || y > card_y + card_h {
-            self.customizer = None;
+            if let Some(c) = &mut self.customizer {
+                c.begin_close();
+            }
             self.seat_handler.customizer_open = false;
             self.dirty = true;
             return;
@@ -688,7 +694,9 @@ impl App {
         let close_x = content_x + content_w - close_size;
         let close_y = card_y + 19.0;
         if x >= close_x && x <= close_x + close_size && y >= close_y && y <= close_y + close_size {
-            self.customizer = None;
+            if let Some(c) = &mut self.customizer {
+                c.begin_close();
+            }
             self.seat_handler.customizer_open = false;
             self.dirty = true;
             return;
@@ -1598,6 +1606,18 @@ impl App {
             self.menu.anim.hover_factor
         };
 
+        // Phase 2: Global entrance scale + opacity (applied as Transform + alpha multiplier)
+        // Also apply closing_opacity fade during close phase
+        let global_opacity = (self.menu.anim.overall_opacity * self.menu.anim.closing_opacity).clamp(0.0, 1.0);
+        let global_scale = self.menu.anim.overall_scale.clamp(0.0, 1.5);
+        // Build a scale transform centered at dial center
+        let global_xform = if (global_scale - 1.0).abs() > 0.001 {
+            SkTransform::from_scale(global_scale, global_scale)
+                .post_translate(cx * (1.0 - global_scale), cy * (1.0 - global_scale))
+        } else {
+            SkTransform::identity()
+        };
+
         let modal_active = self.folder_browser.is_some() || self.customizer.is_some();
 
         if !modal_active {
@@ -1621,14 +1641,20 @@ impl App {
                     let light_col = lighten_color(primary_col, 1.35);
                     let dark_col = darken_color(primary_col, 1.15);
 
+                    // Apply global_opacity to gradient stops
+                    let a = global_opacity;
+                    let light_faded = Color::from_rgba(light_col.red(), light_col.green(), light_col.blue(), light_col.alpha() * a).unwrap_or(light_col);
+                    let primary_faded = Color::from_rgba(primary_col.red(), primary_col.green(), primary_col.blue(), primary_col.alpha() * a).unwrap_or(primary_col);
+                    let dark_faded = Color::from_rgba(dark_col.red(), dark_col.green(), dark_col.blue(), dark_col.alpha() * a).unwrap_or(dark_col);
+
                     let grad = RadialGradient::new(
                         Point::from_xy(cx, cy),
                         Point::from_xy(cx, cy),
                         SLICE_OUTER_R + 10.0,
                         vec![
-                            GradientStop::new(0.0, light_col),
-                            GradientStop::new(0.35, primary_col),
-                            GradientStop::new(1.0, dark_col),
+                            GradientStop::new(0.0, light_faded),
+                            GradientStop::new(0.35, primary_faded),
+                            GradientStop::new(1.0, dark_faded),
                         ],
                         SpreadMode::Pad,
                         SkTransform::identity(),
@@ -1636,18 +1662,19 @@ impl App {
                     if let Some(shader) = grad {
                         paint.shader = shader;
                     } else {
-                        paint.set_color(primary_col);
+                        paint.set_color(primary_faded);
                     }
-                    pixmap.fill_path(&path, &paint, tiny_skia::FillRule::Winding, SkTransform::identity(), None);
+                    pixmap.fill_path(&path, &paint, tiny_skia::FillRule::Winding, global_xform, None);
 
                     let mut stroke_paint = Paint::default();
-                    stroke_paint.set_color(light_col);
+                    let stroke_col = Color::from_rgba(light_col.red(), light_col.green(), light_col.blue(), light_col.alpha() * a).unwrap_or(light_col);
+                    stroke_paint.set_color(stroke_col);
                     stroke_paint.anti_alias = true;
                     let stroke = Stroke { width: 1.6, ..Default::default() };
-                    pixmap.stroke_path(&path, &stroke_paint, &stroke, SkTransform::identity(), None);
+                    pixmap.stroke_path(&path, &stroke_paint, &stroke, global_xform, None);
                 } else {
                     // Neutral frosted glass gradient softly harmonized with system surface colors:
-                    let (stop0, stop1) = if self.menu.is_low_end_gpu {
+                    let (stop0_raw, stop1_raw) = if self.menu.is_low_end_gpu {
                         (
                             Color::from_rgba(
                                 (surface_col.red() * 1.2).clamp(0.08, 0.25),
@@ -1679,6 +1706,11 @@ impl App {
                         )
                     };
 
+                    // Modulate by global opacity
+                    let a = global_opacity;
+                    let stop0 = Color::from_rgba(stop0_raw.red(), stop0_raw.green(), stop0_raw.blue(), stop0_raw.alpha() * a).unwrap_or(stop0_raw);
+                    let stop1 = Color::from_rgba(stop1_raw.red(), stop1_raw.green(), stop1_raw.blue(), stop1_raw.alpha() * a).unwrap_or(stop1_raw);
+
                     let grad = RadialGradient::new(
                         Point::from_xy(cx, cy),
                         Point::from_xy(cx, cy),
@@ -1695,20 +1727,20 @@ impl App {
                     } else {
                         paint.set_color(stop0);
                     }
-                    pixmap.fill_path(&path, &paint, tiny_skia::FillRule::Winding, SkTransform::identity(), None);
+                    pixmap.fill_path(&path, &paint, tiny_skia::FillRule::Winding, global_xform, None);
 
                     // Subtle white sheen
                     let mut sheen_paint = Paint::default();
-                    sheen_paint.set_color(Color::from_rgba(1.0, 1.0, 1.0, 0.04).unwrap_or(Color::WHITE));
+                    sheen_paint.set_color(Color::from_rgba(1.0, 1.0, 1.0, 0.04 * a).unwrap_or(Color::WHITE));
                     sheen_paint.anti_alias = true;
-                    pixmap.fill_path(&path, &sheen_paint, tiny_skia::FillRule::Winding, SkTransform::identity(), None);
+                    pixmap.fill_path(&path, &sheen_paint, tiny_skia::FillRule::Winding, global_xform, None);
 
                     // Crisp soft white translucent border
                     let mut stroke_paint = Paint::default();
-                    stroke_paint.set_color(Color::from_rgba(1.0, 1.0, 1.0, 0.22).unwrap_or(Color::WHITE));
+                    stroke_paint.set_color(Color::from_rgba(1.0, 1.0, 1.0, 0.22 * a).unwrap_or(Color::WHITE));
                     stroke_paint.anti_alias = true;
                     let stroke = Stroke { width: 1.0, ..Default::default() };
-                    pixmap.stroke_path(&path, &stroke_paint, &stroke, SkTransform::identity(), None);
+                    pixmap.stroke_path(&path, &stroke_paint, &stroke, global_xform, None);
                 }
             }
 
@@ -1734,21 +1766,25 @@ impl App {
                 let icon_x = cx + icon_r * mid_rad.cos();
                 let icon_y = cy + icon_r * mid_rad.sin();
 
+                // Apply global scale to icon position (scale from cx,cy)
+                let scaled_icon_x = cx + (icon_x - cx) * global_scale;
+                let scaled_icon_y = cy + (icon_y - cy) * global_scale;
+
                 let is_hov = i as i32 == hovered || (i as i32 == self.menu.parent_slice_index && self.menu.active_sub_tier.is_some());
                 let icon_base_col = if is_hov { on_primary_col } else { Color::from_rgba8(255, 255, 255, 240) };
                 let icon_col = Color::from_rgba(
                     icon_base_col.red(),
                     icon_base_col.green(),
                     icon_base_col.blue(),
-                    icon_base_col.alpha() * p,
+                    icon_base_col.alpha() * p * global_opacity,
                 ).unwrap_or(icon_base_col);
 
                 let icon_size = (if is_hov { 28.0 } else { 24.0 }) * ease;
-                draw_icon(&mut self.font_renderer, pixmap, &slice.icon, icon_x, icon_y, icon_size, icon_col);
+                draw_icon(&mut self.font_renderer, pixmap, &slice.icon, scaled_icon_x, scaled_icon_y, icon_size, icon_col);
 
                 if i < 9 && p >= 0.5 {
-                    let badge_x = icon_x + 12.0;
-                    let badge_y = icon_y - 12.0;
+                    let badge_x = scaled_icon_x + 12.0;
+                    let badge_y = scaled_icon_y - 12.0;
                     draw_number_badge(&mut self.font_renderer, pixmap, i + 1, badge_x, badge_y, is_hov, primary_col, on_primary_col);
                 }
             }
@@ -1775,6 +1811,10 @@ impl App {
             }
 
             // 4. Draw Center Hub
+            // Phase 2: hub_hover_factor drives smooth scale-up (was instant 1.06 jump)
+            let hub_scale_with_hover = self.menu.anim.hub_scale
+                * (1.0 + 0.06 * self.menu.anim.hub_hover_factor.clamp(0.0, 1.0))
+                * global_scale.max(0.5); // apply global entrance scale
             let (hub_icon, hub_label) = self.menu.active_hover_hub_content();
             draw_center_hub(
                 &mut self.font_renderer,
@@ -1785,7 +1825,7 @@ impl App {
                 hub_icon.as_deref(),
                 &hub_label,
                 self.menu.center_hovered,
-                self.menu.anim.hub_scale,
+                hub_scale_with_hover,
                 primary_col,
                 self.menu.is_low_end_gpu,
             );
@@ -1846,7 +1886,19 @@ impl App {
 
                 let hub_dur = if self.menu.is_low_end_gpu { 50.0 } else { 150.0 };
                 let slice_count = self.menu.current_slices.len().max(1) as f32;
-                let rev_dur = if self.menu.is_low_end_gpu { 70.0 } else { (slice_count * 45.0).max(220.0) };
+                let rev_dur = if self.menu.is_low_end_gpu { 70.0 } else { (slice_count * 28.0).max(160.0) };
+
+                // Phase 2: Global entrance — overall_scale 0.88->1.0 (100ms OutBack(1.15))
+                //          and overall_opacity 0->1 (70ms OutCubic), run simultaneously from t=0
+                if !self.menu.is_low_end_gpu {
+                    let t_scale = (self.menu.anim.opening_elapsed / 100.0).clamp(0.0, 1.0);
+                    self.menu.anim.overall_scale = 0.88 + 0.12 * Easing::OutBack(1.15).value(t_scale);
+                    let t_opacity = (self.menu.anim.opening_elapsed / 70.0).clamp(0.0, 1.0);
+                    self.menu.anim.overall_opacity = Easing::OutCubic.value(t_opacity);
+                } else {
+                    self.menu.anim.overall_scale = 1.0;
+                    self.menu.anim.overall_opacity = 1.0;
+                }
 
                 // 1. Hub pops up first with OutBack(1.3)
                 let t_hub = (self.menu.anim.opening_elapsed / hub_dur).clamp(0.0, 1.0);
@@ -1855,6 +1907,26 @@ impl App {
                 } else {
                     Easing::OutBack(1.3).value(t_hub)
                 };
+
+                // Phase 2: Hub micro-pulse — after hub_dur, briefly scale to 1.08 and back
+                if !self.menu.is_low_end_gpu && self.menu.anim.opening_elapsed >= hub_dur {
+                    if !self.menu.anim.hub_pulse_active && !self.menu.anim.hub_pulse_elapsed.is_nan() && self.menu.anim.hub_pulse_elapsed < 80.0 {
+                        self.menu.anim.hub_pulse_active = true;
+                    }
+                    if self.menu.anim.hub_pulse_active {
+                        self.menu.anim.hub_pulse_elapsed = (self.menu.anim.hub_pulse_elapsed + dt).min(80.0);
+                        let t_pulse = (self.menu.anim.hub_pulse_elapsed / 80.0).clamp(0.0, 1.0);
+                        // OutBack(2.0) creates a big spring; map 0..1 to scale 1.0..1.08..1.0
+                        let pulse_raw = Easing::OutBack(2.0).value(t_pulse);
+                        // pulse_raw goes 0 -> overshoot -> 1; we want 1.0 -> 1.08 -> 1.0
+                        let peak = (pulse_raw - 1.0).abs(); // distance from 1.0 during overshoot
+                        self.menu.anim.hub_scale = (1.0 + peak * 0.08).max(1.0);
+                        if self.menu.anim.hub_pulse_elapsed >= 80.0 {
+                            self.menu.anim.hub_scale = 1.0;
+                            self.menu.anim.hub_pulse_active = false;
+                        }
+                    }
+                }
 
                 // 2. Main ring slices blossom out one-by-one clockwise with OutCubic
                 if self.menu.anim.opening_elapsed >= hub_dur {
@@ -1868,25 +1940,28 @@ impl App {
 
                 if self.menu.anim.opening_elapsed >= (hub_dur + rev_dur) {
                     self.menu.anim.hub_scale = 1.0;
+                    self.menu.anim.overall_scale = 1.0;
+                    self.menu.anim.overall_opacity = 1.0;
                     self.menu.anim.reveal_progress = slice_count;
                     self.menu.phase = MenuPhase::Open;
                 }
             }
             MenuPhase::Open => {
-                // Main ring hover spring (OutBack 1.25 ripple)
+                // Phase 1: Main ring hover spring — 110ms OutBack(1.35) (was 160ms OutBack(1.25))
                 if self.menu.hovered_index >= 0 {
-                    self.menu.anim.hover_elapsed = (self.menu.anim.hover_elapsed + dt).min(160.0);
-                    let t = (self.menu.anim.hover_elapsed / 160.0).clamp(0.0, 1.0);
-                    let next = if self.menu.is_low_end_gpu { 1.0 } else { Easing::OutBack(1.25).value(t) };
+                    self.menu.anim.hover_elapsed = (self.menu.anim.hover_elapsed + dt).min(110.0);
+                    let t = (self.menu.anim.hover_elapsed / 110.0).clamp(0.0, 1.0);
+                    let next = if self.menu.is_low_end_gpu { 1.0 } else { Easing::OutBack(1.35).value(t) };
                     if (next - self.menu.anim.hover_factor).abs() > 0.002 {
                         self.menu.anim.hover_factor = next;
                         self.dirty = true;
                     }
                 } else if self.menu.anim.hover_factor > 0.002 {
-                    self.menu.anim.hover_elapsed = (self.menu.anim.hover_elapsed + dt).min(120.0);
-                    let t = (self.menu.anim.hover_elapsed / 120.0).clamp(0.0, 1.0);
+                    // Phase 1: Hover fade — 80ms OutCubic (was 120ms OutQuad)
+                    self.menu.anim.hover_elapsed = (self.menu.anim.hover_elapsed + dt).min(80.0);
+                    let t = (self.menu.anim.hover_elapsed / 80.0).clamp(0.0, 1.0);
                     let fade_start = if self.menu.anim.hover_fade_start > 0.001 { self.menu.anim.hover_fade_start } else { 1.0 };
-                    let next = (fade_start * (1.0 - Easing::OutQuad.value(t))).max(0.0);
+                    let next = (fade_start * (1.0 - Easing::OutCubic.value(t))).max(0.0);
                     if (next - self.menu.anim.hover_factor).abs() > 0.002 {
                         self.menu.anim.hover_factor = next;
                         self.dirty = true;
@@ -1895,20 +1970,40 @@ impl App {
                     self.menu.anim.hover_factor = 0.0;
                 }
 
-                // Outer sub-ring hover spring (OutBack 1.2 ripple)
+                // Phase 2: Hub hover scale spring
+                if self.menu.center_hovered {
+                    self.menu.anim.hover_elapsed = (self.menu.anim.hover_elapsed + dt).min(80.0);
+                    let t = (self.menu.anim.hover_elapsed / 80.0).clamp(0.0, 1.0);
+                    let next = if self.menu.is_low_end_gpu { 1.0 } else { Easing::OutBack(1.4).value(t) };
+                    if (next - self.menu.anim.hub_hover_factor).abs() > 0.002 {
+                        self.menu.anim.hub_hover_factor = next;
+                        self.dirty = true;
+                    }
+                } else if self.menu.anim.hub_hover_factor > 0.002 {
+                    let next = (self.menu.anim.hub_hover_factor - dt / 60.0).max(0.0);
+                    if (next - self.menu.anim.hub_hover_factor).abs() > 0.002 {
+                        self.menu.anim.hub_hover_factor = next;
+                        self.dirty = true;
+                    }
+                } else {
+                    self.menu.anim.hub_hover_factor = 0.0;
+                }
+
+                // Phase 1: Outer sub-ring hover spring — 95ms OutBack(1.3) (was 140ms OutBack(1.2))
                 if self.menu.outer_hovered_index >= 0 {
-                    self.menu.anim.outer_hover_elapsed = (self.menu.anim.outer_hover_elapsed + dt).min(140.0);
-                    let t = (self.menu.anim.outer_hover_elapsed / 140.0).clamp(0.0, 1.0);
-                    let next = if self.menu.is_low_end_gpu { 1.0 } else { Easing::OutBack(1.2).value(t) };
+                    self.menu.anim.outer_hover_elapsed = (self.menu.anim.outer_hover_elapsed + dt).min(95.0);
+                    let t = (self.menu.anim.outer_hover_elapsed / 95.0).clamp(0.0, 1.0);
+                    let next = if self.menu.is_low_end_gpu { 1.0 } else { Easing::OutBack(1.3).value(t) };
                     if (next - self.menu.anim.outer_hover_factor).abs() > 0.002 {
                         self.menu.anim.outer_hover_factor = next;
                         self.dirty = true;
                     }
                 } else if self.menu.anim.outer_hover_factor > 0.002 {
-                    self.menu.anim.outer_hover_elapsed = (self.menu.anim.outer_hover_elapsed + dt).min(100.0);
-                    let t = (self.menu.anim.outer_hover_elapsed / 100.0).clamp(0.0, 1.0);
+                    // Phase 1: Outer hover fade — 65ms OutCubic (was 100ms OutQuad)
+                    self.menu.anim.outer_hover_elapsed = (self.menu.anim.outer_hover_elapsed + dt).min(65.0);
+                    let t = (self.menu.anim.outer_hover_elapsed / 65.0).clamp(0.0, 1.0);
                     let fade_start = if self.menu.anim.outer_hover_fade_start > 0.001 { self.menu.anim.outer_hover_fade_start } else { 1.0 };
-                    let next = (fade_start * (1.0 - Easing::OutQuad.value(t))).max(0.0);
+                    let next = (fade_start * (1.0 - Easing::OutCubic.value(t))).max(0.0);
                     if (next - self.menu.anim.outer_hover_factor).abs() > 0.002 {
                         self.menu.anim.outer_hover_factor = next;
                         self.dirty = true;
@@ -1917,10 +2012,10 @@ impl App {
                     self.menu.anim.outer_hover_factor = 0.0;
                 }
 
-                // Sub-tier staggered reveal
+                // Phase 3: Sub-tier staggered reveal — flat 150ms (was per-count scaled)
                 if self.menu.active_sub_tier.is_some() && !self.menu.sub_slices.is_empty() {
                     let sub_count = self.menu.sub_slices.len() as f32;
-                    let sub_dur = if self.menu.is_low_end_gpu { 80.0 } else { (sub_count * 40.0).max(180.0) };
+                    let sub_dur = if self.menu.is_low_end_gpu { 80.0 } else { 150.0 };
                     self.menu.anim.sub_elapsed = (self.menu.anim.sub_elapsed + dt).min(sub_dur);
                     let t = (self.menu.anim.sub_elapsed / sub_dur).clamp(0.0, 1.0);
                     let next = Easing::OutCubic.value(t) * sub_count;
@@ -1929,8 +2024,25 @@ impl App {
                         self.dirty = true;
                     }
                 } else if self.menu.anim.sub_reveal_progress > 0.0 {
-                    self.menu.anim.sub_reveal_progress = 0.0;
+                    // Phase 3: Sub-ring collapse — 100ms InCubic reverse (was instant reset)
+                    if !self.menu.anim.sub_closing_active {
+                        self.menu.anim.sub_closing_active = true;
+                        self.menu.anim.sub_closing_elapsed = 0.0;
+                    }
+                    self.menu.anim.sub_closing_elapsed = (self.menu.anim.sub_closing_elapsed + dt).min(100.0);
+                    let t = (self.menu.anim.sub_closing_elapsed / 100.0).clamp(0.0, 1.0);
+                    let progress_start = self.menu.anim.sub_reveal_progress.max(0.1);
+                    let next = (progress_start * (1.0 - Easing::InCubic.value(t))).max(0.0);
+                    if next < 0.01 {
+                        self.menu.anim.sub_reveal_progress = 0.0;
+                        self.menu.anim.sub_closing_active = false;
+                        self.menu.anim.sub_closing_elapsed = 0.0;
+                    } else {
+                        self.menu.anim.sub_reveal_progress = next;
+                    }
                     self.dirty = true;
+                } else {
+                    self.menu.anim.sub_closing_active = false;
                 }
             }
             MenuPhase::ClosingAnimated { ref pending_action } => {
@@ -1941,6 +2053,10 @@ impl App {
                 let hub_dur = if self.menu.is_low_end_gpu { 20.0 } else { 50.0 };
                 let total_dur = collapse_dur + hub_dur;
 
+                // Phase 2: closing_opacity fades 1.0->0.0 over entire close duration (InQuad)
+                let t_fade = (self.menu.anim.closing_elapsed / total_dur).clamp(0.0, 1.0);
+                self.menu.anim.closing_opacity = (1.0 - Easing::InQuad.value(t_fade)).max(0.0);
+
                 // 1. Slices collapse inward (InCubic)
                 let t_collapse = (self.menu.anim.closing_elapsed / collapse_dur).clamp(0.0, 1.0);
                 let ease_collapse = 1.0 - Easing::InCubic.value(t_collapse);
@@ -1948,14 +2064,9 @@ impl App {
                 self.menu.anim.reveal_progress = ease_collapse * slice_count;
                 self.menu.anim.sub_reveal_progress = ease_collapse * self.menu.sub_slices.len() as f32;
 
-                // 2. Hub pops down (InQuad)
-                if self.menu.anim.closing_elapsed >= collapse_dur {
-                    let hub_elapsed = self.menu.anim.closing_elapsed - collapse_dur;
-                    let t_hub = (hub_elapsed / hub_dur).clamp(0.0, 1.0);
-                    self.menu.anim.hub_scale = (1.0 - Easing::InQuad.value(t_hub)).max(0.0);
-                } else {
-                    self.menu.anim.hub_scale = 1.0;
-                }
+                // 2. Hub pops down (InQuad) — simultaneous with close now
+                let t_hub = (self.menu.anim.closing_elapsed / total_dur).clamp(0.0, 1.0);
+                self.menu.anim.hub_scale = (1.0 - Easing::InQuad.value(t_hub)).max(0.0);
 
                 if self.menu.anim.closing_elapsed >= total_dur {
                     let action_opt = pending_action.clone();
@@ -1974,17 +2085,30 @@ impl App {
             _ => {}
         }
 
-        // Animate modal popups (180ms OutCubic scale & fade-in)
+        // Phase 4: Modal open — 160ms OutBack(1.1) spring (was 180ms OutCubic)
+        // Phase 4: Modal close — 120ms InBack(0.9) exit animation
         if let Some(c) = &mut self.customizer {
-            if c.anim_progress < 1.0 {
-                c.anim_elapsed = (c.anim_elapsed + dt).min(180.0);
-                let t = (c.anim_elapsed / 180.0).clamp(0.0, 1.0);
-                let next = Easing::OutCubic.value(t);
+            if c.is_closing {
+                // Close animation: 120ms InBack(0.9) — scale+fade out
+                c.close_elapsed = (c.close_elapsed + dt).min(120.0);
+                let t = (c.close_elapsed / 120.0).clamp(0.0, 1.0);
+                let next = (1.0 - Easing::InBack(0.9).value(t)).max(0.0);
+                c.anim_progress = next;
+                self.dirty = true;
+                if c.close_elapsed >= 120.0 {
+                    // Animation done, remove modal
+                    self.customizer = None;
+                }
+            } else if c.anim_progress < 1.0 {
+                // Open animation: 160ms OutBack(1.1)
+                c.anim_elapsed = (c.anim_elapsed + dt).min(160.0);
+                let t = (c.anim_elapsed / 160.0).clamp(0.0, 1.0);
+                let next = Easing::OutBack(1.1).value(t).clamp(0.0, 1.1); // allow slight overshoot
                 if (next - c.anim_progress).abs() > 0.002 {
                     c.anim_progress = next;
                     self.dirty = true;
                 }
-                if c.anim_elapsed >= 180.0 {
+                if c.anim_elapsed >= 160.0 {
                     c.anim_progress = 1.0;
                     self.dirty = true;
                 }
@@ -1992,15 +2116,26 @@ impl App {
         }
 
         if let Some(fb) = &mut self.folder_browser {
-            if fb.anim_progress < 1.0 {
-                fb.anim_elapsed = (fb.anim_elapsed + dt).min(180.0);
-                let t = (fb.anim_elapsed / 180.0).clamp(0.0, 1.0);
-                let next = Easing::OutCubic.value(t);
+            if fb.is_closing {
+                // Close animation: 120ms InBack(0.9)
+                fb.close_elapsed = (fb.close_elapsed + dt).min(120.0);
+                let t = (fb.close_elapsed / 120.0).clamp(0.0, 1.0);
+                let next = (1.0 - Easing::InBack(0.9).value(t)).max(0.0);
+                fb.anim_progress = next;
+                self.dirty = true;
+                if fb.close_elapsed >= 120.0 {
+                    self.folder_browser = None;
+                }
+            } else if fb.anim_progress < 1.0 {
+                // Open animation: 160ms OutBack(1.1)
+                fb.anim_elapsed = (fb.anim_elapsed + dt).min(160.0);
+                let t = (fb.anim_elapsed / 160.0).clamp(0.0, 1.0);
+                let next = Easing::OutBack(1.1).value(t).clamp(0.0, 1.1);
                 if (next - fb.anim_progress).abs() > 0.002 {
                     fb.anim_progress = next;
                     self.dirty = true;
                 }
-                if fb.anim_elapsed >= 180.0 {
+                if fb.anim_elapsed >= 160.0 {
                     fb.anim_progress = 1.0;
                     self.dirty = true;
                 }

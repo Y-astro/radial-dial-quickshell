@@ -27,6 +27,9 @@ pub struct FolderBrowserState {
     pub search_focused: bool,
     pub anim_elapsed: f32,
     pub anim_progress: f32,
+    /// Phase 4: modal close animation
+    pub is_closing: bool,
+    pub close_elapsed: f32,
 }
 
 impl FolderBrowserState {
@@ -43,12 +46,16 @@ impl FolderBrowserState {
             search_focused: false,
             anim_elapsed: 0.0,
             anim_progress: 0.0,
+            is_closing: false,
+            close_elapsed: 0.0,
         }
     }
 
     /// Opens the folder browser targeted at `initial_path`.
     pub fn open(&mut self, initial_path: &str) {
         self.is_open = true;
+        self.is_closing = false;
+        self.close_elapsed = 0.0;
         self.current_path = initial_path.to_string();
         self.search_query.clear();
         self.search_focused = false;
@@ -61,9 +68,18 @@ impl FolderBrowserState {
         }
     }
 
-    /// Closes the modal.
+    /// Begins the modal close animation. Caller must poll `is_closing` and remove when done.
+    pub fn begin_close(&mut self) {
+        if !self.is_closing {
+            self.is_closing = true;
+            self.close_elapsed = 0.0;
+        }
+    }
+
+    /// Closes the modal immediately (no animation).
     pub fn close(&mut self) {
         self.is_open = false;
+        self.is_closing = false;
     }
 
     /// Updates the current directory listing.

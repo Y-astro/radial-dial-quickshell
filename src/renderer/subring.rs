@@ -3,7 +3,7 @@
 
 use crate::font::FontRenderer;
 use crate::renderer::pie::{
-    draw_floating_wedge, CORNER_RADIUS_SUB, SUB_ICON_R, SUB_INNER_R, SUB_OUTER_R,
+    draw_floating_wedge, CORNER_RADIUS_SUB, SUB_INNER_R, SUB_OUTER_R,
 };
 use crate::renderer::text::draw_icon;
 use crate::state::actions::SliceItem;
@@ -33,9 +33,9 @@ fn fade_color(c: Color, alpha_mul: f32) -> Color {
         .unwrap_or(c)
 }
 
-// ─── Easing helpers (inlined for performance) ─────────────────────────────────
+// ─── Easing helpers (inlined for zero-overhead hot path) ──────────────────────
 
-/// OutBack: springy overshoot. `s` controls overshoot strength (0.0 = no overshoot).
+/// OutBack: springy bloom. `s` controls overshoot strength.
 #[inline(always)]
 fn out_back(t: f32, s: f32) -> f32 {
     let t = t.clamp(0.0, 1.0);
@@ -43,38 +43,40 @@ fn out_back(t: f32, s: f32) -> f32 {
     1.0 + (s + 1.0) * inv * inv * inv + s * inv * inv
 }
 
-/// OutCubic: fast-start slow-end.
+/// OutCubic: fast initial pop, decelerates smoothly into place.
 #[inline(always)]
 fn out_cubic(t: f32) -> f32 {
     let inv = 1.0 - t.clamp(0.0, 1.0);
     1.0 - inv * inv * inv
 }
 
-/// InCubic: slow-start fast-end (for collapse).
+/// InCubic: slow start, accelerates as it retracts into main ring.
 #[inline(always)]
 fn in_cubic(t: f32) -> f32 {
     let t = t.clamp(0.0, 1.0);
     t * t * t
 }
 
+/// InQuad: gentle quadratic acceleration for fading out.
+#[inline(always)]
+fn in_quad(t: f32) -> f32 {
+    let t = t.clamp(0.0, 1.0);
+    t * t
+}
+
 // ─── Animation constants ──────────────────────────────────────────────────────
 
-/// ms between successive wedge close starts (last wedge → first wedge)
-const CLOSE_STAGGER_MS: f32 = 28.0;
-/// ms for each individual wedge to fully collapse
-const CLOSE_WEDGE_MS: f32 = 100.0;
 /// Gap between wedges as a fraction of their angular width
 const GAP_FRACTION: f32 = 0.07;
 
-// ─── Core renderer ────────────────────────────────────────────────────────────
+// ─── Core wedge renderer ──────────────────────────────────────────────────────
 
-/// Renders sub-arc wedges with spring-bloom open and reverse-stagger close.
+/// Renders sub-arc wedges with symmetrical spring-bloom open and smooth collapse.
 ///
-/// # Arguments
-/// - `reveal_progress` — `0.0..N` open stagger ramp; wedge `j` becomes visible
-///   once `reveal_progress > j`.
-/// - `sub_closing_progress` — `0.0..1.0` global close progress (0 = open/opening,
-///   >0 = collapsing). Drives a reverse-staggered per-wedge collapse.
+/// # Symmetrical Arc Blossom:
+/// Wedges directly over the parent slice (the center of the arc) bloom outward first.
+/// The outer wedges unfurl symmetrically to the left and right, like flower petals
+/// opening directly out of the parent slice.
 pub fn draw_sub_ring(
     pixmap: &mut Pixmap,
     cx: f32,
@@ -94,68 +96,64 @@ pub fn draw_sub_ring(
         return;
     }
 
-    // Total close timeline: last wedge starts at t=0, first wedge starts at
-    // t = (m-1)*CLOSE_STAGGER_MS, each runs for CLOSE_WEDGE_MS.
-    let total_close_span = CLOSE_WEDGE_MS + (m - 1) as f32 * CLOSE_STAGGER_MS;
-    let close_elapsed_ms = sub_closing_progress * total_close_span;
+    // Normalized open progress across 0.0..1.0
+    let norm_open = (reveal_progress / m as f32).clamp(0.0, 1.0);
+    let mid_idx = (m - 1) as f32 / 2.0;
+    let max_dist = mid_idx.max(0.5);
 
     for j in 0..m {
-        // ── Open stagger ─────────────────────────────────────────────────────
-        let raw_p = (reveal_progress - j as f32).clamp(0.0, 1.0);
-        if raw_p <= 0.0 {
+        // Distance from center of arc (0.0 = center over parent slice, 1.0 = extreme ends)
+        let norm_dist = ((j as f32 - mid_idx).abs() / max_dist).clamp(0.0, 1.0);
+
+        // ── Symmetrical Open: center blooms at t=0, edges bloom by t=0.22 ──
+        let open_delay = norm_dist * 0.22;
+        let wedge_open_raw = ((norm_open - open_delay) / (1.0 - 0.22)).clamp(0.0, 1.0);
+        if wedge_open_raw <= 0.0 {
             continue;
         }
 
-        // ── Close stagger (reverse: last wedge closes first) ─────────────────
-        // delay for wedge j: last wedge (j=m-1) → 0 ms, first (j=0) → (m-1)*STAGGER
-        let close_delay = (m - 1 - j) as f32 * CLOSE_STAGGER_MS;
-        let wedge_close_t = if sub_closing_progress > 0.0 {
-            ((close_elapsed_ms - close_delay) / CLOSE_WEDGE_MS).clamp(0.0, 1.0)
+        // ── Symmetrical Close: edges retract first towards center ────────────
+        let close_delay = (1.0 - norm_dist) * 0.18;
+        let wedge_close_raw = if sub_closing_progress > 0.0 {
+            ((sub_closing_progress - close_delay) / (1.0 - 0.18)).clamp(0.0, 1.0)
         } else {
             0.0
         };
 
-        // ── Per-wedge open easing ─────────────────────────────────────────────
-        // OutBack spring for radial bloom; slight overshoot makes it feel springy
-        let open_ease = if is_low_end { raw_p } else { out_back(raw_p, 0.30) };
-        // Quadratic opacity ramp — wedge starts transparent and solidifies quickly
-        let open_opacity = raw_p * raw_p;
+        // Open easings:
+        // OutBack(0.32) gives an energetic spring bounce that overshoots SUB_OUTER_R slightly
+        let open_radial = if is_low_end { wedge_open_raw } else { out_back(wedge_open_raw, 0.32) };
+        let open_alpha  = out_cubic(wedge_open_raw);
 
-        // ── Per-wedge close easing ────────────────────────────────────────────
-        let close_ease    = if sub_closing_progress > 0.0 { in_cubic(wedge_close_t) } else { 0.0 };
-        let close_opacity = if sub_closing_progress > 0.0 { 1.0 - wedge_close_t } else { 1.0 };
+        // Close easings:
+        let close_radial = if sub_closing_progress > 0.0 { in_cubic(wedge_close_raw) } else { 0.0 };
+        let close_alpha  = if sub_closing_progress > 0.0 { 1.0 - in_quad(wedge_close_raw) } else { 1.0 };
 
-        // Combined alpha and radial progress
-        let alpha_mul = (open_opacity * close_opacity).clamp(0.0, 1.0);
-        // radial_t drives SUB_INNER_R → SUB_OUTER_R; allow slight OutBack overshoot
-        let radial_t  = (open_ease - close_ease).clamp(0.0, 1.35);
+        // Combined radial travel factor and opacity
+        let net_radial = (open_radial * (1.0 - close_radial)).max(0.0);
+        let alpha_mul  = (open_alpha * close_alpha).clamp(0.0, 1.0);
 
         if alpha_mul < 0.01 {
             continue;
         }
 
-        // ── Hover lift ────────────────────────────────────────────────────────
+        // Hover lift
         let is_hov = j as i32 == hovered_index;
         let r_lift = if is_hov { 5.0 * hover_factor } else { 0.0 };
 
-        // ── Radial bloom ──────────────────────────────────────────────────────
-        // Outer edge springs from SUB_INNER_R → SUB_OUTER_R (+ hover lift)
+        // Radial bloom: outer edge pushes outward from SUB_INNER_R past SUB_OUTER_R with spring overshoot
         let travel = SUB_OUTER_R - SUB_INNER_R;
-        let current_outer = (SUB_INNER_R + travel * radial_t.min(1.0) + r_lift)
-            .max(SUB_INNER_R + 2.0);
+        let current_outer = (SUB_INNER_R + travel * net_radial + r_lift).max(SUB_INNER_R + 2.0);
 
-        // ── Angular squeeze-open ──────────────────────────────────────────────
-        // Wedge starts as a narrow sliver at its angular center then fans out.
-        // Only applies during open phase (not while closing — keep full width).
+        // Angular squeeze: wedge unfurls from 50% width to full width as it blooms
         let squeeze = if is_low_end || sub_closing_progress > 0.0 {
             1.0
         } else {
-            GAP_FRACTION + (1.0 - GAP_FRACTION) * out_cubic(open_ease.min(1.0))
+            0.50 + 0.50 * out_cubic(wedge_open_raw)
         };
 
         let arc_center = start_angle_deg + (j as f32 + 0.5) * slice_width_deg;
         let arc_half   = slice_width_deg * 0.5 * squeeze;
-        // Apply a fixed angular gap between wedges
         let gap_deg    = slice_width_deg * GAP_FRACTION * 0.5;
         let start_deg  = arc_center - arc_half + gap_deg;
         let end_deg    = arc_center + arc_half - gap_deg;
@@ -176,7 +174,6 @@ pub fn draw_sub_ring(
 
         // ── Fill & stroke ─────────────────────────────────────────────────────
         if is_hov && sub_closing_progress < 0.01 {
-            // Hovered wedge: primary-colour gradient
             let light  = fade_color(lighten_color(primary_col, 1.30), alpha_mul);
             let mid    = fade_color(primary_col, alpha_mul);
             let dark   = fade_color(darken_color(primary_col, 1.10), alpha_mul);
@@ -204,7 +201,6 @@ pub fn draw_sub_ring(
             pixmap.stroke_path(&path, &sp, &Stroke { width: 1.8, ..Default::default() },
                                Transform::identity(), None);
         } else {
-            // Idle wedge: frosted glass
             let (s0_base, s1_base) = if is_low_end {
                 (
                     Color::from_rgba(0.11, 0.11, 0.14, 0.90).unwrap_or(Color::BLACK),
@@ -232,13 +228,13 @@ pub fn draw_sub_ring(
             if let Some(shader) = grad { paint.shader = shader; } else { paint.set_color(s0); }
             pixmap.fill_path(&path, &paint, FillRule::Winding, Transform::identity(), None);
 
-            // White wash overlay
+            // Translucent white wash
             let mut wp = Paint::default();
             wp.set_color(Color::from_rgba(1.0, 1.0, 1.0, 0.06 * alpha_mul).unwrap_or(Color::WHITE));
             wp.anti_alias = true;
             pixmap.fill_path(&path, &wp, FillRule::Winding, Transform::identity(), None);
 
-            // Border stroke
+            // Subtle border stroke
             let mut sp = Paint::default();
             sp.set_color(Color::from_rgba(1.0, 1.0, 1.0, 0.24 * alpha_mul).unwrap_or(Color::WHITE));
             sp.anti_alias = true;
@@ -250,7 +246,7 @@ pub fn draw_sub_ring(
 
 // ─── Icon renderer ────────────────────────────────────────────────────────────
 
-/// Renders icons on top of sub-ring wedges, matching the same open/close alpha.
+/// Renders icons on top of sub-ring wedges, positioned dynamically centered on the expanding wedge.
 pub fn draw_sub_ring_icons(
     font_renderer: &mut FontRenderer,
     pixmap: &mut Pixmap,
@@ -270,31 +266,47 @@ pub fn draw_sub_ring_icons(
         return;
     }
 
-    let total_close_span = CLOSE_WEDGE_MS + (m - 1) as f32 * CLOSE_STAGGER_MS;
-    let close_elapsed_ms = sub_closing_progress * total_close_span;
+    let norm_open = (reveal_progress / m as f32).clamp(0.0, 1.0);
+    let mid_idx = (m - 1) as f32 / 2.0;
+    let max_dist = mid_idx.max(0.5);
 
     for j in 0..m {
-        let raw_p = (reveal_progress - j as f32).clamp(0.0, 1.0);
-        if raw_p <= 0.0 { continue; }
+        let norm_dist = ((j as f32 - mid_idx).abs() / max_dist).clamp(0.0, 1.0);
 
-        let close_delay   = (m - 1 - j) as f32 * CLOSE_STAGGER_MS;
-        let wedge_close_t = if sub_closing_progress > 0.0 {
-            ((close_elapsed_ms - close_delay) / CLOSE_WEDGE_MS).clamp(0.0, 1.0)
+        let open_delay = norm_dist * 0.22;
+        let wedge_open_raw = ((norm_open - open_delay) / (1.0 - 0.22)).clamp(0.0, 1.0);
+        if wedge_open_raw <= 0.0 { continue; }
+
+        let close_delay = (1.0 - norm_dist) * 0.18;
+        let wedge_close_raw = if sub_closing_progress > 0.0 {
+            ((sub_closing_progress - close_delay) / (1.0 - 0.18)).clamp(0.0, 1.0)
         } else { 0.0 };
 
-        let open_opacity  = raw_p * raw_p;
-        let close_opacity = if sub_closing_progress > 0.0 { 1.0 - wedge_close_t } else { 1.0 };
-        let alpha = (open_opacity * close_opacity).clamp(0.0, 1.0);
+        let open_radial = out_back(wedge_open_raw, 0.32);
+        let open_alpha  = out_cubic(wedge_open_raw);
+        let close_radial = if sub_closing_progress > 0.0 { in_cubic(wedge_close_raw) } else { 0.0 };
+        let close_alpha  = if sub_closing_progress > 0.0 { 1.0 - in_quad(wedge_close_raw) } else { 1.0 };
+
+        let net_radial = (open_radial * (1.0 - close_radial)).max(0.0);
+        let alpha = (open_alpha * close_alpha).clamp(0.0, 1.0);
         if alpha < 0.01 { continue; }
 
-        let is_hov   = j as i32 == hovered_index;
-        let r_lift   = if is_hov { 5.0 * hover_factor } else { 0.0 };
-        let cur_icon_r = SUB_ICON_R + r_lift / 2.0;
-        let mid_rad    = (start_angle_deg + (j as f32 + 0.5) * slice_width_deg).to_radians();
-        let icon_x     = cx + cur_icon_r * mid_rad.cos();
-        let icon_y     = cy + cur_icon_r * mid_rad.sin();
+        let is_hov = j as i32 == hovered_index;
+        let r_lift = if is_hov { 5.0 * hover_factor } else { 0.0 };
 
-        let icon_size  = if is_hov { 26.0 } else { 22.0 };
+        // Keep icon centered radially on the wedge as it blooms/retracts
+        let travel = SUB_OUTER_R - SUB_INNER_R;
+        let cur_outer = SUB_INNER_R + travel * net_radial + r_lift;
+        let cur_icon_r = SUB_INNER_R + (cur_outer - SUB_INNER_R) * 0.5;
+
+        let mid_rad = (start_angle_deg + (j as f32 + 0.5) * slice_width_deg).to_radians();
+        let icon_x  = cx + cur_icon_r * mid_rad.cos();
+        let icon_y  = cy + cur_icon_r * mid_rad.sin();
+
+        // Icon scales smoothly up with spring bloom
+        let base_size = if is_hov { 26.0 } else { 22.0 };
+        let icon_size = base_size * (0.60 + 0.40 * open_radial.min(1.1));
+
         let icon_color = if is_hov {
             fade_color(on_primary_col, alpha)
         } else {
@@ -390,11 +402,8 @@ mod tests {
 
     #[test]
     fn test_sub_ring_spring_overshoot() {
-        // OutBack(0.30) should allow the outer edge to briefly exceed SUB_OUTER_R.
-        // At raw_p=1.0, out_back(1.0, 0.30) == 1.0 (no overshoot at t=1, only mid-travel).
-        // At raw_p=0.85, out_back > 1.0 → current_outer > SUB_OUTER_R.
         let t = 0.85_f32;
-        let v = out_back(t, 0.30);
-        assert!(v > 1.0, "OutBack(0.30) should overshoot at t=0.85, got {}", v);
+        let v = out_back(t, 0.32);
+        assert!(v > 1.0, "OutBack(0.32) should overshoot at t=0.85, got {}", v);
     }
 }

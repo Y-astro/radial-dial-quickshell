@@ -266,20 +266,18 @@ impl MenuState {
         self.sub_slices = self.generate_sub_slices(tier);
         self.outer_hovered_index = -1;
         self.anim.sub_reveal_progress = 0.0;
+        self.anim.sub_elapsed = 0.0;
         // Cancel any in-progress close animation
         self.anim.sub_closing_active = false;
         self.anim.sub_closing_elapsed = 0.0;
     }
 
     /// Close currently active sub-tier — marks as closing so step_frame can
-    /// animate the collapse before clearing sub_slices.
+    /// animate the collapse before clearing sub_slices and resetting parent_slice_index.
     pub fn close_sub_tier(&mut self) {
         self.active_sub_tier = None;
-        self.parent_slice_index = -1;
-        // Do NOT clear sub_slices here — step_frame will drain sub_reveal_progress
-        // via the sub_closing_active path, then clear sub_slices when done.
-        // Also do NOT reset sub_reveal_progress — step_frame needs the current value
-        // to drive the OutCubic drain animation.
+        // Keep parent_slice_index intact so the closing arc stays centered on the parent slice!
+        // step_frame will reset parent_slice_index and clear sub_slices once the animation completes.
         self.outer_hovered_index = -1;
     }
 
@@ -730,9 +728,10 @@ mod tests {
 
         menu.close_sub_tier();
         assert_eq!(menu.active_sub_tier, None);
-        assert_eq!(menu.parent_slice_index, -1);
+        // parent_slice_index is preserved (0) so the closing arc stays centered over the parent slice!
+        assert_eq!(menu.parent_slice_index, 0);
         // sub_slices are NOT cleared immediately — they stay alive for the close
-        // animation (step_frame drains sub_reveal_progress then clears sub_slices).
+        // animation (step_frame drains sub_reveal_progress then clears sub_slices and resets parent_slice_index).
         assert_eq!(menu.outer_hovered_index, -1);
     }
 

@@ -2034,28 +2034,32 @@ impl App {
                         self.dirty = true;
                     }
                 } else if self.menu.anim.sub_reveal_progress > 0.0 {
-                    // Sub-ring collapse — reverse-stagger (matches CLOSE_WEDGE_MS=100, CLOSE_STAGGER_MS=28 in subring.rs)
+                    // Sub-ring collapse: reverse-stagger close animation.
+                    // sub_closing_elapsed drives the sub_closing_progress passed to renderer.
                     if !self.menu.anim.sub_closing_active {
                         self.menu.anim.sub_closing_active = true;
                         self.menu.anim.sub_closing_elapsed = 0.0;
                     }
-                    let sub_count = self.menu.sub_slices.len();
-                    // Total close span: CLOSE_WEDGE_MS + (m-1)*CLOSE_STAGGER_MS
+                    let sub_count = self.menu.sub_slices.len().max(1);
+                    // Total span matches subring.rs constants (CLOSE_WEDGE_MS=100, STAGGER=28)
                     let total_span = 100.0 + (sub_count as f32 - 1.0).max(0.0) * 28.0;
                     self.menu.anim.sub_closing_elapsed =
                         (self.menu.anim.sub_closing_elapsed + dt).min(total_span + 20.0);
-                    // Drain reveal_progress proportionally so wedges disappear in sync
+
+                    // sub_reveal_progress drains 1→0 proportionally (keeps it in sync with
+                    // the per-wedge close_t in the renderer)
                     let t = (self.menu.anim.sub_closing_elapsed / total_span).clamp(0.0, 1.0);
-                    // Smooth the progress drain: OutCubic so it starts slow and accelerates
-                    let drain = {
-                        let inv = 1.0 - t;
-                        inv * inv * inv
-                    };
-                    let next = self.menu.anim.sub_reveal_progress.max(0.0) * drain;
+                    let count = sub_count as f32;
+                    // Drain: reveal_progress goes from count → 0 linearly with t
+                    // so the renderer's raw_p per wedge follows correctly
+                    let next = count * (1.0 - t).clamp(0.0, 1.0);
+
                     if next < 0.01 || self.menu.anim.sub_closing_elapsed >= total_span + 10.0 {
+                        // Animation done — clear everything
                         self.menu.anim.sub_reveal_progress = 0.0;
                         self.menu.anim.sub_closing_active = false;
                         self.menu.anim.sub_closing_elapsed = 0.0;
+                        self.menu.sub_slices.clear(); // safe to clear now
                     } else {
                         self.menu.anim.sub_reveal_progress = next;
                     }

@@ -1789,10 +1789,19 @@ impl App {
                 }
             }
 
-            // 3. Draw Sub-Ring if active
-            if self.menu.active_sub_tier.is_some() && !self.menu.sub_slices.is_empty() {
+            // 3. Draw Sub-Ring if active OR if it's still animating closed
+            let sub_is_visible = (self.menu.active_sub_tier.is_some() && !self.menu.sub_slices.is_empty())
+                || (self.menu.anim.sub_reveal_progress > 0.01 && !self.menu.sub_slices.is_empty());
+            if sub_is_visible {
                 let sub_start_deg = self.menu.sub_start_angle();
                 let sub_width_deg = self.menu.sub_slice_width();
+                // Compute closing progress: 0.0 = fully open, 1.0 = fully closed
+                let sub_closing_progress = if self.menu.anim.sub_closing_active {
+                    let total_span = 100.0_f32 + (self.menu.sub_slices.len() as f32 - 1.0).max(0.0) * 28.0;
+                    (self.menu.anim.sub_closing_elapsed / total_span).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
                 draw_sub_ring_with_icons(
                     &mut self.font_renderer,
                     pixmap,
@@ -1804,6 +1813,7 @@ impl App {
                     self.menu.outer_hovered_index,
                     self.menu.anim.outer_hover_factor,
                     self.menu.anim.sub_reveal_progress,
+                    sub_closing_progress,
                     primary_col,
                     on_primary_col,
                     self.menu.is_low_end_gpu,
@@ -2024,16 +2034,25 @@ impl App {
                         self.dirty = true;
                     }
                 } else if self.menu.anim.sub_reveal_progress > 0.0 {
-                    // Phase 3: Sub-ring collapse — 100ms InCubic reverse (was instant reset)
+                    // Sub-ring collapse — reverse-stagger (matches CLOSE_WEDGE_MS=100, CLOSE_STAGGER_MS=28 in subring.rs)
                     if !self.menu.anim.sub_closing_active {
                         self.menu.anim.sub_closing_active = true;
                         self.menu.anim.sub_closing_elapsed = 0.0;
                     }
-                    self.menu.anim.sub_closing_elapsed = (self.menu.anim.sub_closing_elapsed + dt).min(100.0);
-                    let t = (self.menu.anim.sub_closing_elapsed / 100.0).clamp(0.0, 1.0);
-                    let progress_start = self.menu.anim.sub_reveal_progress.max(0.1);
-                    let next = (progress_start * (1.0 - Easing::InCubic.value(t))).max(0.0);
-                    if next < 0.01 {
+                    let sub_count = self.menu.sub_slices.len();
+                    // Total close span: CLOSE_WEDGE_MS + (m-1)*CLOSE_STAGGER_MS
+                    let total_span = 100.0 + (sub_count as f32 - 1.0).max(0.0) * 28.0;
+                    self.menu.anim.sub_closing_elapsed =
+                        (self.menu.anim.sub_closing_elapsed + dt).min(total_span + 20.0);
+                    // Drain reveal_progress proportionally so wedges disappear in sync
+                    let t = (self.menu.anim.sub_closing_elapsed / total_span).clamp(0.0, 1.0);
+                    // Smooth the progress drain: OutCubic so it starts slow and accelerates
+                    let drain = {
+                        let inv = 1.0 - t;
+                        inv * inv * inv
+                    };
+                    let next = self.menu.anim.sub_reveal_progress.max(0.0) * drain;
+                    if next < 0.01 || self.menu.anim.sub_closing_elapsed >= total_span + 10.0 {
                         self.menu.anim.sub_reveal_progress = 0.0;
                         self.menu.anim.sub_closing_active = false;
                         self.menu.anim.sub_closing_elapsed = 0.0;

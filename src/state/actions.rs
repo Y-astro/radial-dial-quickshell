@@ -46,8 +46,16 @@ pub enum ActionId {
     NightLight,
     // Context: Terminal
     KittyNewWindow { pid: i64, title: String },
-    KittyAgy,
-    LaunchAgyTerminal,
+    KittyAgy {
+        pid: i64,
+        title: String,
+        address: String,
+        is_terminal: bool,
+    },
+    LaunchAgyTerminal {
+        pid: i64,
+        title: String,
+    },
     KittyClear,
     KittyDolphin { pid: i64, title: String },
     // Context: Browser
@@ -111,8 +119,16 @@ impl ActionId {
             "lock" => Some(ActionId::Lock),
             "nightlight" | "night_light" => Some(ActionId::NightLight),
             "kitty_new_window" => Some(ActionId::KittyNewWindow { pid: 0, title: String::new() }),
-            "kitty_agy" => Some(ActionId::KittyAgy),
-            "agy_terminal" | "kitty_launch_agy" | "launch_agy" => Some(ActionId::LaunchAgyTerminal),
+            "kitty_agy" => Some(ActionId::KittyAgy {
+                pid: 0,
+                title: String::new(),
+                address: String::new(),
+                is_terminal: false,
+            }),
+            "agy_terminal" | "kitty_launch_agy" | "launch_agy" => Some(ActionId::LaunchAgyTerminal {
+                pid: 0,
+                title: String::new(),
+            }),
             "kitty_clear" => Some(ActionId::KittyClear),
             "kitty_dolphin" => Some(ActionId::KittyDolphin { pid: 0, title: String::new() }),
             "browsertabs" | "browser_tabs" => Some(ActionId::BrowserTabs),
@@ -718,6 +734,8 @@ pub fn resolve_slice_item_with_window(
     }
     let win_pid = window.map(|w| w.pid).unwrap_or(0);
     let win_title = window.map(|w| w.title.clone()).unwrap_or_default();
+    let win_addr = window.map(|w| w.address.clone()).unwrap_or_default();
+    let is_terminal = window.map(|w| crate::state::context::resolve_context(&w.class, &w.title) == crate::state::context::Context::Terminal).unwrap_or(false);
     if let Some(def) = get_action_def(fn_id) {
         let action = if def.has_sub_tier {
             None
@@ -725,6 +743,16 @@ pub fn resolve_slice_item_with_window(
             match def.id {
                 "kitty_dolphin" => Some(ActionId::KittyDolphin { pid: win_pid, title: win_title.clone() }),
                 "kitty_new_window" => Some(ActionId::KittyNewWindow { pid: win_pid, title: win_title.clone() }),
+                "kitty_agy" => Some(ActionId::KittyAgy {
+                    pid: win_pid,
+                    title: win_title.clone(),
+                    address: win_addr.clone(),
+                    is_terminal,
+                }),
+                "agy_terminal" | "kitty_launch_agy" | "launch_agy" => Some(ActionId::LaunchAgyTerminal {
+                    pid: win_pid,
+                    title: win_title.clone(),
+                }),
                 _ => ActionId::from_id(def.id),
             }
         };
@@ -744,6 +772,16 @@ pub fn resolve_slice_item_with_window(
         let action = match fn_id {
             "kitty_dolphin" => Some(ActionId::KittyDolphin { pid: win_pid, title: win_title.clone() }),
             "kitty_new_window" => Some(ActionId::KittyNewWindow { pid: win_pid, title: win_title.clone() }),
+            "kitty_agy" => Some(ActionId::KittyAgy {
+                pid: win_pid,
+                title: win_title.clone(),
+                address: win_addr.clone(),
+                is_terminal,
+            }),
+            "agy_terminal" | "kitty_launch_agy" | "launch_agy" => Some(ActionId::LaunchAgyTerminal {
+                pid: win_pid,
+                title: win_title.clone(),
+            }),
             _ => ActionId::from_id(fn_id),
         };
         SliceItem {
@@ -1148,9 +1186,41 @@ pub fn get_command(action: &ActionId) -> Option<String> {
                 cwd_str, cwd_str, cwd_str
             ))
         }
-        ActionId::KittyAgy => Some("sleep 0.05 && wtype 'agy --dangerously-skip-permissions' -k Return".into()),
-        ActionId::LaunchAgyTerminal => Some("kitty & sleep 0.35 && wtype 'agy --dangerously-skip-permissions' -k Return".into()),
-        ActionId::KittyClear => Some("sleep 0.05 && wtype -M ctrl -k l -m ctrl".into()),
+        ActionId::KittyAgy { pid, title, address, is_terminal } => {
+            if *is_terminal && !address.is_empty() {
+                let addr = if address.starts_with("0x") {
+                    format!("address:{}", address)
+                } else {
+                    format!("address:0x{}", address.trim_start_matches("0x"))
+                };
+                Some(format!(
+                    "hyprctl dispatch focuswindow \"{}\" 2>/dev/null; sleep 0.12 && wtype 'agy --dangerously-skip-permissions' -k Return &",
+                    addr
+                ))
+            } else {
+                let cwd = resolve_terminal_cwd(*pid, title);
+                let cwd_str = cwd.to_string_lossy().replace('"', "\\\"");
+                Some(format!(
+                    "(kitty --directory \"{}\" sh -c \"agy --dangerously-skip-permissions; exec \\${{SHELL:-fish}}\" || \
+                      alacritty --working-directory \"{}\" -e sh -c \"agy --dangerously-skip-permissions; exec \\${{SHELL:-bash}}\" || \
+                      foot -D \"{}\" sh -c \"agy --dangerously-skip-permissions; exec \\${{SHELL:-bash}}\" || \
+                      kitty agy --dangerously-skip-permissions) &",
+                    cwd_str, cwd_str, cwd_str
+                ))
+            }
+        }
+        ActionId::LaunchAgyTerminal { pid, title } => {
+            let cwd = resolve_terminal_cwd(*pid, title);
+            let cwd_str = cwd.to_string_lossy().replace('"', "\\\"");
+            Some(format!(
+                "(kitty --directory \"{}\" sh -c \"agy --dangerously-skip-permissions; exec \\${{SHELL:-fish}}\" || \
+                  alacritty --working-directory \"{}\" -e sh -c \"agy --dangerously-skip-permissions; exec \\${{SHELL:-bash}}\" || \
+                  foot -D \"{}\" sh -c \"agy --dangerously-skip-permissions; exec \\${{SHELL:-bash}}\" || \
+                  kitty agy --dangerously-skip-permissions) &",
+                cwd_str, cwd_str, cwd_str
+            ))
+        }
+        ActionId::KittyClear => Some("sleep 0.08 && wtype -M ctrl -k l -m ctrl".into()),
         ActionId::KittyDolphin { pid, title } => {
             let cwd = resolve_terminal_cwd(*pid, title);
             let cwd_str = cwd.to_string_lossy().replace('"', "\\\"");
@@ -1460,8 +1530,8 @@ mod tests {
         assert_eq!(ActionId::from_id("lock"), Some(ActionId::Lock));
         assert_eq!(ActionId::from_id("nightlight"), Some(ActionId::NightLight));
         assert_eq!(ActionId::from_id("kitty_new_window"), Some(ActionId::KittyNewWindow { pid: 0, title: String::new() }));
-        assert_eq!(ActionId::from_id("kitty_agy"), Some(ActionId::KittyAgy));
-        assert_eq!(ActionId::from_id("agy_terminal"), Some(ActionId::LaunchAgyTerminal));
+        assert_eq!(ActionId::from_id("kitty_agy"), Some(ActionId::KittyAgy { pid: 0, title: String::new(), address: String::new(), is_terminal: false }));
+        assert_eq!(ActionId::from_id("agy_terminal"), Some(ActionId::LaunchAgyTerminal { pid: 0, title: String::new() }));
         assert_eq!(ActionId::from_id("kitty_clear"), Some(ActionId::KittyClear));
         assert_eq!(ActionId::from_id("kitty_dolphin"), Some(ActionId::KittyDolphin { pid: 0, title: String::new() }));
         assert_eq!(ActionId::from_id("browsertabs"), Some(ActionId::BrowserTabs));
@@ -1520,8 +1590,9 @@ mod tests {
         assert!(get_command(&ActionId::BrowserDupTab).is_some());
         assert!(get_command(&ActionId::BrowserReopenTab).is_some());
         assert!(get_command(&ActionId::KittyNewWindow { pid: 0, title: String::new() }).is_some());
-        assert!(get_command(&ActionId::KittyAgy).is_some());
-        assert!(get_command(&ActionId::LaunchAgyTerminal).is_some());
+        assert!(get_command(&ActionId::KittyAgy { pid: 0, title: String::new(), address: String::new(), is_terminal: false }).is_some());
+        assert!(get_command(&ActionId::KittyAgy { pid: 1234, title: "kitty".into(), address: "0x123".into(), is_terminal: true }).is_some());
+        assert!(get_command(&ActionId::LaunchAgyTerminal { pid: 0, title: String::new() }).is_some());
         assert!(get_command(&ActionId::KittyClear).is_some());
         assert!(get_command(&ActionId::KittyDolphin { pid: 0, title: String::new() }).is_some());
         assert!(get_command(&ActionId::Scratchpad).is_some());
@@ -1571,6 +1642,37 @@ mod tests {
             get_command(&jump),
             Some("(dolphin \"/home/astro/Downloads\" || xdg-open \"/home/astro/Downloads\") &".into())
         );
+
+        // KittyAgy: Not in terminal (e.g. on desktop) -> launches terminal running agy
+        let agy_desktop = ActionId::KittyAgy {
+            pid: 0,
+            title: String::new(),
+            address: String::new(),
+            is_terminal: false,
+        };
+        let cmd_desktop = get_command(&agy_desktop).unwrap();
+        assert!(cmd_desktop.contains("kitty --directory"));
+        assert!(cmd_desktop.contains("agy --dangerously-skip-permissions"));
+
+        // KittyAgy: In active terminal -> focuses terminal and types command
+        let agy_term = ActionId::KittyAgy {
+            pid: 1234,
+            title: "kitty".into(),
+            address: "0x560d123".into(),
+            is_terminal: true,
+        };
+        let cmd_term = get_command(&agy_term).unwrap();
+        assert!(cmd_term.contains("focuswindow \"address:0x560d123\""));
+        assert!(cmd_term.contains("wtype 'agy --dangerously-skip-permissions' -k Return"));
+
+        // LaunchAgyTerminal: Always launches a new terminal
+        let agy_launch = ActionId::LaunchAgyTerminal {
+            pid: 0,
+            title: String::new(),
+        };
+        let cmd_launch = get_command(&agy_launch).unwrap();
+        assert!(cmd_launch.contains("kitty --directory"));
+        assert!(cmd_launch.contains("agy --dangerously-skip-permissions"));
     }
 
     #[test]

@@ -5,7 +5,7 @@ use crate::font::FontRenderer;
 use crate::renderer::pie::{
     draw_floating_wedge, CORNER_RADIUS_SUB, SUB_INNER_R, SUB_OUTER_R,
 };
-use crate::renderer::text::draw_icon;
+use crate::renderer::text::{draw_icon, draw_number_badge};
 use crate::state::actions::SliceItem;
 use tiny_skia::{
     Color, FillRule, GradientStop, Paint, PathBuilder, Pixmap, Point, RadialGradient, SpreadMode,
@@ -259,6 +259,7 @@ pub fn draw_sub_ring_icons(
     hover_factor: f32,
     reveal_progress: f32,
     sub_closing_progress: f32,
+    primary_col: Color,
     on_primary_col: Color,
 ) {
     let m = sub_slices.len();
@@ -314,6 +315,22 @@ pub fn draw_sub_ring_icons(
         };
 
         draw_icon(font_renderer, pixmap, &sub_slices[j].icon, icon_x, icon_y, icon_size, icon_color);
+
+        // Number badges for hotkeys 1..9 on subdial segments
+        if j < 9 && !sub_slices[j].is_add_button && alpha >= 0.5 {
+            let badge_x = icon_x + 12.0;
+            let badge_y = icon_y - 12.0;
+            draw_number_badge(
+                font_renderer,
+                pixmap,
+                j + 1,
+                badge_x,
+                badge_y,
+                is_hov,
+                primary_col,
+                on_primary_col,
+            );
+        }
     }
 }
 
@@ -344,7 +361,7 @@ pub fn draw_sub_ring_with_icons(
     draw_sub_ring_icons(
         font_renderer, pixmap, cx, cy, sub_slices, start_angle_deg, slice_width_deg,
         hovered_index, hover_factor, reveal_progress, sub_closing_progress,
-        on_primary_col,
+        primary_col, on_primary_col,
     );
 }
 
@@ -405,5 +422,41 @@ mod tests {
         let t = 0.85_f32;
         let v = out_back(t, 0.32);
         assert!(v > 1.0, "OutBack(0.32) should overshoot at t=0.85, got {}", v);
+    }
+
+    #[test]
+    fn test_sub_ring_with_icons_renders_badges() {
+        let mut pixmap = Pixmap::new(600, 600).unwrap();
+        let mut font_renderer = FontRenderer::new();
+        let mut slices = vec![
+            SliceItem::new("f1", "Folder 1", "folder", 0),
+            SliceItem::new("f2", "Folder 2", "folder", 1),
+        ];
+        let mut add_btn = SliceItem::new("add", "Add", "add", 2);
+        add_btn.is_add_button = true;
+        slices.push(add_btn);
+
+        let primary = Color::from_rgba8(137, 180, 250, 255);
+        let on_primary = Color::from_rgba8(17, 17, 27, 255);
+
+        draw_sub_ring_with_icons(
+            &mut font_renderer,
+            &mut pixmap,
+            300.0,
+            300.0,
+            &slices,
+            -45.0,
+            30.0,
+            0,
+            1.0,
+            3.0,
+            0.0,
+            primary,
+            on_primary,
+            false,
+        );
+
+        let non_zero = pixmap.pixels().iter().filter(|p| p.alpha() > 0).count();
+        assert!(non_zero > 1000, "Sub ring with icons and badges should render pixels");
     }
 }

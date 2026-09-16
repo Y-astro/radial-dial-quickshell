@@ -1595,12 +1595,12 @@ impl App {
             return true;
         }
 
-        let hovered = if self.menu.drag.is_dragging {
+        let hovered = if self.menu.drag.is_dragging && !self.menu.drag.is_sub_drag {
             self.menu.drag.target_index
         } else {
             self.menu.hovered_index
         };
-        let hover_factor = if self.menu.drag.is_dragging {
+        let hover_factor = if self.menu.drag.is_dragging && !self.menu.drag.is_sub_drag {
             1.0
         } else {
             self.menu.anim.hover_factor
@@ -1809,6 +1809,11 @@ impl App {
                 } else {
                     0.0
                 };
+                let (sub_hovered, sub_hover_factor) = if self.menu.drag.is_dragging && self.menu.drag.is_sub_drag {
+                    (self.menu.drag.target_index, 1.0)
+                } else {
+                    (self.menu.outer_hovered_index, self.menu.anim.outer_hover_factor)
+                };
                 draw_sub_ring_with_icons(
                     &mut self.font_renderer,
                     pixmap,
@@ -1817,8 +1822,8 @@ impl App {
                     &self.menu.sub_slices,
                     sub_start_deg,
                     sub_width_deg,
-                    self.menu.outer_hovered_index,
-                    self.menu.anim.outer_hover_factor,
+                    sub_hovered,
+                    sub_hover_factor,
                     self.menu.anim.sub_reveal_progress,
                     sub_closing_progress,
                     primary_col,
@@ -2508,18 +2513,17 @@ mod main_tests {
 
         // Simulate opening customizer on slice 0: hovered_index is cleared to -1
         menu.hovered_index = -1;
-        let mut modal_click_active = false;
-        let mut customizer_open = true;
 
         // User clicks inside customizer (e.g. at remove or select position)
         // Modal consumes press
-        modal_click_active = true;
+        let mut modal_click_active = true;
         // Modal finishes action and closes
-        customizer_open = false;
+        let customizer_open = false;
 
         // User releases mouse button: release must be consumed by modal_click_active!
         let action = if modal_click_active {
             modal_click_active = false;
+            let _ = modal_click_active;
             None
         } else if customizer_open {
             None

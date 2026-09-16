@@ -6,7 +6,7 @@
 
 #[allow(unused_imports)]
 use crate::renderer::pie::{HUB_RADIUS, SLICE_INNER_R, SUB_INNER_R, SUB_OUTER_R};
-use crate::state::actions::ActionId;
+use crate::state::actions::{ActionId, SubTierType};
 use crate::state::menu::{MenuPhase, MenuState};
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -266,26 +266,56 @@ impl SeatHandler {
         // Handle drag-to-reorder if dragging
         if menu.drag.is_dragging {
             menu.drag.update_position(x, y);
-            menu.drag.update_target_slot(
-                menu.center_x,
-                menu.center_y,
-                menu.current_slices.len(),
-                menu.slice_angle(),
-            );
-            return;
-        } else if menu.drag.from_index >= 0 {
-            menu.drag.update_position(x, y);
-            if menu.drag.threshold_met {
-                menu.drag.is_dragging = true;
-                if menu.active_sub_tier.is_some() {
-                    menu.close_sub_tier();
-                }
+            if menu.drag.is_sub_drag {
+                let valid_count = menu.config.file_jump_targets.len();
+                let total_slices = menu.sub_slices.len();
+                let sub_start = menu.sub_start_angle();
+                let sub_width = menu.sub_slice_width();
+                menu.drag.update_sub_target_slot(
+                    menu.center_x,
+                    menu.center_y,
+                    valid_count,
+                    total_slices,
+                    sub_start,
+                    sub_width,
+                );
+            } else {
                 menu.drag.update_target_slot(
                     menu.center_x,
                     menu.center_y,
                     menu.current_slices.len(),
                     menu.slice_angle(),
                 );
+            }
+            return;
+        } else if menu.drag.from_index >= 0 {
+            menu.drag.update_position(x, y);
+            if menu.drag.threshold_met {
+                menu.drag.is_dragging = true;
+                if menu.drag.is_sub_drag {
+                    let valid_count = menu.config.file_jump_targets.len();
+                    let total_slices = menu.sub_slices.len();
+                    let sub_start = menu.sub_start_angle();
+                    let sub_width = menu.sub_slice_width();
+                    menu.drag.update_sub_target_slot(
+                        menu.center_x,
+                        menu.center_y,
+                        valid_count,
+                        total_slices,
+                        sub_start,
+                        sub_width,
+                    );
+                } else {
+                    if menu.active_sub_tier.is_some() {
+                        menu.close_sub_tier();
+                    }
+                    menu.drag.update_target_slot(
+                        menu.center_x,
+                        menu.center_y,
+                        menu.current_slices.len(),
+                        menu.slice_angle(),
+                    );
+                }
                 return;
             }
         }
@@ -384,6 +414,20 @@ impl SeatHandler {
         }
 
         if state == ButtonState::Pressed {
+            // Sub-ring FileJump target pressed -> start potential sub-ring drag-to-reorder.
+            // Do NOT execute click on press! Defer to ButtonState::Released so user can drag.
+            if menu.active_sub_tier == Some(SubTierType::FileJump)
+                && menu.outer_hovered_index >= 0
+                && (menu.outer_hovered_index as usize) < menu.sub_slices.len()
+            {
+                let idx = menu.outer_hovered_index as usize;
+                if !menu.sub_slices[idx].is_add_button {
+                    menu.drag.start_sub_drag(menu.outer_hovered_index, self.last_x, self.last_y);
+                    self.click_handled_on_press = false;
+                    return None;
+                }
+            }
+
             // Main ring slice pressed -> start potential drag-to-reorder.
             // Do NOT execute click on press! Defer to ButtonState::Released so user can drag.
             if menu.hovered_index >= 0 && menu.outer_hovered_index < 0 && !menu.center_hovered {
@@ -398,8 +442,12 @@ impl SeatHandler {
 
         if state == ButtonState::Released {
             if menu.drag.is_dragging {
-                menu.finish_drag_reorder();
-                let _ = menu.config.save();
+                if menu.drag.is_sub_drag {
+                    menu.finish_sub_drag_reorder();
+                } else {
+                    menu.finish_drag_reorder();
+                    let _ = menu.config.save();
+                }
                 menu.drag.reset();
                 self.click_handled_on_press = false;
                 return None;
@@ -950,6 +998,58 @@ mod tests {
         assert!(!menu.drag.is_dragging);
         assert_eq!(menu.current_slices[0].id, "slice1");
         assert_eq!(menu.current_slices[1].id, "slice0");
+    }
+
+    #[test]
+    fn test_sub_drag_file_jump_workflow() {
+        let mut seat = SeatHandler::new();
+        let mut menu = MenuState::new(RadialConfig::default(), false);
+        menu.center_x = 200.0;
+        menu.center_y = 200.0;
+        menu.phase = MenuPhase::Open;
+        menu.open_sub_tier(0, SubTierType::FileJump);
+        assert!(menu.sub_slices.len() >= 3);
+
+        let target_0_label = menu.config.file_jump_targets[0].label.clone();
+        let target_1_label = menu.config.file_jump_targets[1].label.clone();
+
+        // 1. Hover sub-slice 0
+        menu.outer_hovered_index = 0;
+        seat.last_x = 200.0;
+        seat.last_y = 200.0 + 195.0; // on outer sub-ring radius
+
+        // 2. Press left button -> does NOT open folder! Defers for potential drag.
+        let press_act = seat.handle_pointer_button(&mut menu, BTN_LEFT, ButtonState::Pressed);
+        assert_eq!(press_act, None);
+        assert!(menu.drag.is_sub_drag);
+        assert_eq!(menu.drag.from_index, 0);
+
+        // 3. Move > 10px -> threshold met -> is_dragging becomes true
+        seat.handle_pointer_motion(&mut menu, 230.0, 200.0 + 195.0);
+        assert!(menu.drag.is_dragging);
+        assert_eq!(menu.active_sub_tier, Some(SubTierType::FileJump)); // Sub-tier MUST stay open!
+
+        // Force target slot 1
+        menu.drag.target_index = 1;
+
+        // 4. Release button to complete reorder
+        let release_act = seat.handle_pointer_button(&mut menu, BTN_LEFT, ButtonState::Released);
+        assert_eq!(release_act, None); // Does NOT execute action
+        assert!(!menu.drag.is_dragging);
+        assert_eq!(menu.config.file_jump_targets[0].label, target_1_label);
+        assert_eq!(menu.config.file_jump_targets[1].label, target_0_label);
+        assert_eq!(menu.sub_slices[0].label, target_1_label);
+        assert_eq!(menu.sub_slices[1].label, target_0_label);
+
+        // 5. Normal click (without drag) executes action on release
+        menu.outer_hovered_index = 0;
+        seat.last_x = 200.0;
+        seat.last_y = 395.0;
+        let press_act2 = seat.handle_pointer_button(&mut menu, BTN_LEFT, ButtonState::Pressed);
+        assert_eq!(press_act2, None); // Deferred
+        assert!(!menu.drag.is_dragging);
+        let release_act2 = seat.handle_pointer_button(&mut menu, BTN_LEFT, ButtonState::Released);
+        assert!(matches!(release_act2, Some(ActionId::JumpToFile(_))));
     }
 
     #[test]

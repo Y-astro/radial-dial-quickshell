@@ -329,6 +329,10 @@ impl MenuState {
 
     /// Handles Escape key: closes sub-tier if open (returns false), or closes menu (returns true)
     pub fn handle_escape(&mut self) -> bool {
+        if self.drag.is_dragging {
+            self.drag.reset();
+            return false;
+        }
         if self.active_sub_tier.is_some() {
             self.close_sub_tier();
             false
@@ -383,17 +387,32 @@ impl MenuState {
     pub fn active_hover_hub_content(&self) -> (Option<String>, String) {
         // 1. Dragging slice
         if self.drag.is_dragging && self.drag.from_index >= 0 && self.drag.target_index >= 0 {
-            let from_label = self
-                .current_slices
-                .get(self.drag.from_index as usize)
-                .map(|s| s.label.as_str())
-                .unwrap_or("Slice");
+            if self.drag.is_sub_drag {
+                let from_label = self
+                    .sub_slices
+                    .get(self.drag.from_index as usize)
+                    .map(|s| s.label.as_str())
+                    .unwrap_or("Folder");
 
-            if self.drag.from_index == self.drag.target_index {
-                return (None, format!("Moving {}", from_label));
+                if self.drag.from_index == self.drag.target_index {
+                    return (None, format!("Moving {}", from_label));
+                } else {
+                    let slot = self.drag.target_index + 1;
+                    return (None, format!("Move {} → Slot {}", from_label, slot));
+                }
             } else {
-                let slot = self.drag.target_index + 1;
-                return (None, format!("Move {} → Slot {} (Key {})", from_label, slot, slot));
+                let from_label = self
+                    .current_slices
+                    .get(self.drag.from_index as usize)
+                    .map(|s| s.label.as_str())
+                    .unwrap_or("Slice");
+
+                if self.drag.from_index == self.drag.target_index {
+                    return (None, format!("Moving {}", from_label));
+                } else {
+                    let slot = self.drag.target_index + 1;
+                    return (None, format!("Move {} → Slot {} (Key {})", from_label, slot, slot));
+                }
             }
         }
 
@@ -449,6 +468,31 @@ impl MenuState {
                 self.hovered_index = to as i32;
                 self.anim.hover_factor = 1.0;
                 self.anim.hover_elapsed = 160.0;
+                self.drag.reset();
+                return true;
+            }
+        }
+        self.drag.reset();
+        false
+    }
+
+    /// Complete sub-ring drag-and-drop reorder operation (for FileJump targets)
+    pub fn finish_sub_drag_reorder(&mut self) -> bool {
+        if self.drag.is_dragging
+            && self.drag.is_sub_drag
+            && self.drag.from_index >= 0
+            && self.drag.target_index >= 0
+        {
+            let from = self.drag.from_index as usize;
+            let to = self.drag.target_index as usize;
+            let targets_len = self.config.file_jump_targets.len();
+            if from != to && from < targets_len && to < targets_len {
+                self.config.reorder_file_jump_target(from, to);
+                let _ = self.config.save();
+                self.refresh_sub_slices();
+                self.outer_hovered_index = to as i32;
+                self.anim.outer_hover_factor = 1.0;
+                self.anim.outer_hover_elapsed = 160.0;
                 self.drag.reset();
                 return true;
             }
@@ -859,6 +903,34 @@ mod tests {
         assert!(reordered);
         assert_eq!(menu.current_slices[0].id, slice_1_before);
         assert_eq!(menu.current_slices[1].id, slice_0_before);
+        assert!(!menu.drag.is_dragging);
+    }
+
+    #[test]
+    fn test_sub_drag_reorder() {
+        let mut menu = MenuState::new(RadialConfig::default(), false);
+        menu.open_sub_tier(0, SubTierType::FileJump);
+        assert!(menu.sub_slices.len() >= 2);
+
+        let target_0_before = menu.config.file_jump_targets[0].label.clone();
+        let target_1_before = menu.config.file_jump_targets[1].label.clone();
+
+        menu.drag.start_sub_drag(0, 200.0, 100.0);
+        menu.drag.is_dragging = true;
+        menu.drag.target_index = 1;
+
+        assert_eq!(
+            menu.active_hover_label(),
+            format!("Move {} → Slot 2", target_0_before)
+        );
+
+        let reordered = menu.finish_sub_drag_reorder();
+        assert!(reordered);
+        assert_eq!(menu.config.file_jump_targets[0].label, target_1_before);
+        assert_eq!(menu.config.file_jump_targets[1].label, target_0_before);
+        assert_eq!(menu.sub_slices[0].label, target_1_before);
+        assert_eq!(menu.sub_slices[1].label, target_0_before);
+        assert_eq!(menu.outer_hovered_index, 1);
         assert!(!menu.drag.is_dragging);
     }
 

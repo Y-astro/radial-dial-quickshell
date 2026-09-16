@@ -392,6 +392,17 @@ impl RadialConfig {
         }
     }
 
+    /// Reorder file jump target from_index -> to_index
+    pub fn reorder_file_jump_target(&mut self, from_index: usize, to_index: usize) {
+        if from_index == to_index {
+            return;
+        }
+        if from_index < self.file_jump_targets.len() && to_index < self.file_jump_targets.len() {
+            let item = self.file_jump_targets.remove(from_index);
+            self.file_jump_targets.insert(to_index, item);
+        }
+    }
+
     /// Reset slices for a specific context to default factory slices
     pub fn reset_context(&mut self, context: &str) {
         match context {
@@ -579,6 +590,15 @@ mod tests {
 
         cfg.remove_file_jump_target(orig_count);
         assert_eq!(cfg.file_jump_targets.len(), orig_count);
+
+        // Test reorder
+        if cfg.file_jump_targets.len() >= 2 {
+            let label_0 = cfg.file_jump_targets[0].label.clone();
+            let label_1 = cfg.file_jump_targets[1].label.clone();
+            cfg.reorder_file_jump_target(0, 1);
+            assert_eq!(cfg.file_jump_targets[0].label, label_1);
+            assert_eq!(cfg.file_jump_targets[1].label, label_0);
+        }
     }
 
     #[test]

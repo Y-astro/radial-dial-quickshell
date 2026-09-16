@@ -297,7 +297,7 @@ pub fn function_catalogue() -> Vec<ActionDef> {
         },
         ActionDef {
             id: "btop",
-            label: "Task Manager",
+            label: "btop",
             icon: "monitoring",
             category: "Apps",
             desc: "Open Btop system resource monitor",

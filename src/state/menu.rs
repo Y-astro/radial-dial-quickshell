@@ -407,10 +407,9 @@ impl MenuState {
 
     /// Dynamic active hover content (icon, label) for center hub text/icon
     pub fn active_hover_hub_content(&self) -> (Option<String>, String) {
-        // 0. Adding slice
-        if let Some(adding) = &self.adding_slice {
-            let slot = adding.target_index + 1;
-            return (Some(adding.icon.clone()), format!("Add {} → Slot {}", adding.label, slot));
+        // 0. Adding slice: no text in center hub since user sees where segment is about to be added
+        if self.adding_slice.is_some() {
+            return (None, String::new());
         }
 
         // 1. Dragging slice
@@ -1056,10 +1055,10 @@ mod tests {
         menu.anim.drag_indicator_alpha = 1.0;
         menu.anim.drag_elapsed = 120.0;
 
-        // Hub content displays adding action info
+        // Hub content has no text/icon during adding slice
         let (icon, label) = menu.active_hover_hub_content();
-        assert_eq!(icon, Some("terminal".to_string()));
-        assert_eq!(label, "Add Kitty → Slot 3");
+        assert_eq!(icon, None);
+        assert_eq!(label, "");
 
         // First escape cancels adding_slice and returns false (keeps main dial open)
         let closed = menu.handle_escape();

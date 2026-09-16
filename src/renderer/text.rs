@@ -169,6 +169,74 @@ pub fn draw_text_left(
     }
 }
 
+/// Measures the maximum line width of text rendered at font_size.
+pub fn measure_text_width(
+    font_renderer: &mut FontRenderer,
+    text: &str,
+    font_size: f32,
+) -> f32 {
+    if text.is_empty() || font_size <= 1.0 {
+        return 0.0;
+    }
+
+    let line_height = font_size * 1.25;
+    let mut buffer = Buffer::new(&mut font_renderer.font_system, Metrics::new(font_size, line_height));
+    buffer.set_size(&mut font_renderer.font_system, None, None);
+    let attrs = Attrs::new().family(Family::Name(&font_renderer.text_font_family));
+    buffer.set_text(&mut font_renderer.font_system, text, attrs, Shaping::Advanced);
+    buffer.shape_until_scroll(&mut font_renderer.font_system, false);
+
+    buffer.layout_runs().map(|r| r.line_w).fold(0.0_f32, f32::max)
+}
+
+/// Automatically splits a text string into two balanced lines.
+/// If the text already contains a newline, returns it untouched.
+/// For multi-word text, finds the split point minimizing length difference between the two lines.
+/// For a single long word (>9 chars), splits at the middle character boundary.
+pub fn split_into_two_lines(text: &str) -> String {
+    if text.contains('\n') {
+        return text.to_string();
+    }
+
+    let words: Vec<&str> = text.split_whitespace().collect();
+    if words.len() <= 1 {
+        let char_count = text.chars().count();
+        if char_count > 9 {
+            let mid_char = char_count / 2;
+            let byte_idx = text.char_indices().nth(mid_char).map(|(i, _)| i).unwrap_or(text.len() / 2);
+            return format!("{}\n{}", &text[..byte_idx], &text[byte_idx..]);
+        }
+        return text.to_string();
+    }
+
+    if words.len() == 2 {
+        return format!("{}\n{}", words[0], words[1]);
+    }
+
+    let total_chars: usize = words.iter().map(|w| w.chars().count()).sum::<usize>() + (words.len() - 1);
+    let target = total_chars / 2;
+
+    let mut best_split_idx = 1;
+    let mut best_diff = usize::MAX;
+    let mut current_chars = 0;
+
+    for i in 0..(words.len() - 1) {
+        if i > 0 {
+            current_chars += 1;
+        }
+        current_chars += words[i].chars().count();
+        let diff = (current_chars as isize - target as isize).unsigned_abs();
+        if diff < best_diff {
+            best_diff = diff;
+            best_split_idx = i + 1;
+        }
+    }
+
+    let line1 = words[..best_split_idx].join(" ");
+    let line2 = words[best_split_idx..].join(" ");
+    format!("{}\n{}", line1, line2)
+}
+
 /// Renders a Material Symbols icon centered at (cx, cy) onto the pixmap.
 pub fn draw_icon(
     font_renderer: &mut FontRenderer,
@@ -394,6 +462,32 @@ mod tests {
 
         let non_zero = pixmap.pixels().iter().filter(|p| p.alpha() > 0).count();
         assert!(non_zero > 0, "Left-aligned text rendering should produce non-zero pixels");
+    }
+
+    #[test]
+    fn test_measure_text_width() {
+        let mut font_renderer = FontRenderer::new();
+        assert_eq!(measure_text_width(&mut font_renderer, "", 13.0), 0.0);
+        let w_short = measure_text_width(&mut font_renderer, "btop", 13.0);
+        let w_long = measure_text_width(&mut font_renderer, "Code Editor", 13.0);
+        assert!(w_short > 0.0);
+        assert!(w_long > w_short, "Longer string must measure wider than shorter string");
+    }
+
+    #[test]
+    fn test_split_into_two_lines() {
+        assert_eq!(split_into_two_lines("Code Editor"), "Code\nEditor");
+        assert_eq!(split_into_two_lines("File Manager"), "File\nManager");
+        assert_eq!(split_into_two_lines("Session Menu"), "Session\nMenu");
+        assert_eq!(split_into_two_lines("Active Apps"), "Active\nApps");
+        assert_eq!(split_into_two_lines("Terminal"), "Terminal");
+        assert_eq!(split_into_two_lines("btop"), "btop");
+        assert_eq!(split_into_two_lines("Line1\nLine2"), "Line1\nLine2");
+
+        let split_three = split_into_two_lines("Open CWD in Dolphin");
+        assert!(split_three.contains('\n'));
+        let lines: Vec<&str> = split_three.lines().collect();
+        assert_eq!(lines.len(), 2);
     }
 }
 

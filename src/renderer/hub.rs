@@ -2,7 +2,7 @@
 #![allow(dead_code)]
 
 use crate::font::FontRenderer;
-use crate::renderer::text::{draw_icon, draw_text};
+use crate::renderer::text::{draw_icon, draw_text, measure_text_width, split_into_two_lines};
 use tiny_skia::{Color, FillRule, Paint, PathBuilder, Pixmap, Stroke, Transform};
 
 fn lighten_color(c: Color, factor: f32) -> Color {
@@ -104,10 +104,18 @@ pub fn draw_center_hub(
             // App icon above, workspace text below
             let icon_size = 26.0 * scale;
             let icon_color = Color::from_rgba(1.0, 1.0, 1.0, (245.0 / 255.0) * scale).unwrap_or(Color::WHITE);
-            draw_icon(font_renderer, pixmap, icon, cx, cy - 8.0 * scale, icon_size, icon_color);
+            let sub_font_size = 11.5 * scale;
+            let max_sub_w = 66.0 * scale;
+            let sub_w = measure_text_width(font_renderer, hover_label, sub_font_size);
 
-            let font_size = 11.5 * scale;
-            draw_text(font_renderer, pixmap, hover_label, cx, cy + 16.0 * scale, font_size, text_color);
+            if sub_w > max_sub_w || hover_label.contains('\n') {
+                let multiline = split_into_two_lines(hover_label);
+                draw_icon(font_renderer, pixmap, icon, cx, cy - 12.0 * scale, icon_size, icon_color);
+                draw_text(font_renderer, pixmap, &multiline, cx, cy + 14.0 * scale, 10.5 * scale, text_color);
+            } else {
+                draw_icon(font_renderer, pixmap, icon, cx, cy - 8.0 * scale, icon_size, icon_color);
+                draw_text(font_renderer, pixmap, hover_label, cx, cy + 16.0 * scale, sub_font_size, text_color);
+            }
         } else {
             let icon_size = 26.0 * scale;
             let icon_color = Color::from_rgba(1.0, 1.0, 1.0, (245.0 / 255.0) * scale).unwrap_or(Color::WHITE);
@@ -120,10 +128,21 @@ pub fn draw_center_hub(
         draw_icon(font_renderer, pixmap, "close", cx, cy, icon_size, icon_color);
     } else {
         // 2. Dynamic Segment / Function Name centered
-        let font_size = 13.0 * scale;
+        let single_font_size = 13.0 * scale;
         let eff_a = (primary_col.alpha() * scale).clamp(0.0, 1.0);
         let text_color = Color::from_rgba(primary_col.red(), primary_col.green(), primary_col.blue(), eff_a).unwrap_or(primary_col);
-        draw_text(font_renderer, pixmap, hover_label, cx, cy, font_size, text_color);
+
+        // If text in center occupies too much space on one line, automatically split into 2 lines
+        let max_single_line_w = 64.0 * scale;
+        let single_w = measure_text_width(font_renderer, hover_label, single_font_size);
+
+        if single_w > max_single_line_w || hover_label.contains('\n') {
+            let multiline = split_into_two_lines(hover_label);
+            let font_size = 12.0 * scale;
+            draw_text(font_renderer, pixmap, &multiline, cx, cy, font_size, text_color);
+        } else {
+            draw_text(font_renderer, pixmap, hover_label, cx, cy, single_font_size, text_color);
+        }
     }
 }
 
@@ -192,5 +211,23 @@ mod tests {
 
         let non_zero_app = pixmap_app.pixels().iter().filter(|p| p.alpha() > 0).count();
         assert!(non_zero_app > 500, "Center hub with app icon and WS text must render visible pixels");
+
+        // 4. Draw with long text that automatically splits into 2 lines
+        let mut pixmap_long = Pixmap::new(200, 200).unwrap();
+        draw_center_hub(
+            &mut font_renderer,
+            &mut pixmap_long,
+            100.0,
+            100.0,
+            44.0,
+            None,
+            "Code Editor",
+            false,
+            1.0,
+            primary,
+            false,
+        );
+        let non_zero_long = pixmap_long.pixels().iter().filter(|p| p.alpha() > 0).count();
+        assert!(non_zero_long > 500, "Center hub with multiline text must render visible pixels");
     }
 }

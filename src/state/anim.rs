@@ -113,6 +113,10 @@ pub struct AnimState {
     pub outer_hover_fade_start: f32,
     pub closing_elapsed: f32,
     pub sub_elapsed: f32,
+    pub drag_pluck_progress: f32,
+    pub drag_indicator_alpha: f32,
+    pub drag_indicator_angle: f32,
+    pub drag_elapsed: f32,
 }
 
 impl Default for AnimState {
@@ -138,6 +142,10 @@ impl Default for AnimState {
             outer_hover_fade_start: 1.0,
             closing_elapsed: 0.0,
             sub_elapsed: 0.0,
+            drag_pluck_progress: 0.0,
+            drag_indicator_alpha: 0.0,
+            drag_indicator_angle: 0.0,
+            drag_elapsed: 0.0,
         }
     }
 }

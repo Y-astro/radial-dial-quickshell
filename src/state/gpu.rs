@@ -137,6 +137,7 @@ mod tests {
             custom_colors: None,
             colors: None,
             has_explicit_colors: false,
+            custom_path: None,
         }
     }
 

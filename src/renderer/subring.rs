@@ -3,7 +3,8 @@
 
 use crate::font::FontRenderer;
 use crate::renderer::pie::{
-    draw_floating_wedge, CORNER_RADIUS_SUB, SUB_INNER_R, SUB_OUTER_R,
+    draw_drag_insertion_indicator, draw_floating_wedge, draw_plucked_floating_wedge,
+    CORNER_RADIUS_SUB, SUB_INNER_R, SUB_OUTER_R,
 };
 use crate::renderer::text::{draw_icon, draw_number_badge};
 use crate::state::actions::SliceItem;
@@ -11,6 +12,16 @@ use tiny_skia::{
     Color, FillRule, GradientStop, Paint, PathBuilder, Pixmap, Point, RadialGradient, SpreadMode,
     Stroke, Transform,
 };
+
+#[derive(Debug, Clone, Copy)]
+pub struct SubRingDragInfo {
+    pub from_index: i32,
+    pub target_index: i32,
+    pub pluck_progress: f32,
+    pub indicator_alpha: f32,
+    pub cursor_x: f32,
+    pub cursor_y: f32,
+}
 
 // ─── Local colour helpers ─────────────────────────────────────────────────────
 
@@ -90,6 +101,7 @@ pub fn draw_sub_ring(
     sub_closing_progress: f32,
     primary_col: Color,
     is_low_end: bool,
+    drag_info: Option<SubRingDragInfo>,
 ) {
     let m = sub_slices.len();
     if m == 0 || reveal_progress <= 0.0 {
@@ -100,6 +112,8 @@ pub fn draw_sub_ring(
     let norm_open = (reveal_progress / m as f32).clamp(0.0, 1.0);
     let mid_idx = (m - 1) as f32 / 2.0;
     let max_dist = mid_idx.max(0.5);
+
+    let is_sub_drag = drag_info.is_some();
 
     for j in 0..m {
         // Distance from center of arc (0.0 = center over parent slice, 1.0 = extreme ends)
@@ -138,7 +152,7 @@ pub fn draw_sub_ring(
         }
 
         // Hover lift
-        let is_hov = j as i32 == hovered_index;
+        let is_hov = j as i32 == hovered_index && !is_sub_drag;
         let r_lift = if is_hov { 5.0 * hover_factor } else { 0.0 };
 
         // Radial bloom: outer edge pushes outward from SUB_INNER_R past SUB_OUTER_R with spring overshoot
@@ -155,8 +169,27 @@ pub fn draw_sub_ring(
         let arc_center = start_angle_deg + (j as f32 + 0.5) * slice_width_deg;
         let arc_half   = slice_width_deg * 0.5 * squeeze;
         let gap_deg    = slice_width_deg * GAP_FRACTION * 0.5;
-        let start_deg  = arc_center - arc_half + gap_deg;
-        let end_deg    = arc_center + arc_half - gap_deg;
+        let mut start_deg  = arc_center - arc_half + gap_deg;
+        let mut end_deg    = arc_center + arc_half - gap_deg;
+
+        // Part neighboring slices at target slot insertion boundary during drag
+        if let Some(drag) = drag_info {
+            if drag.from_index >= 0 && drag.target_index >= 0 && drag.from_index != drag.target_index && drag.pluck_progress > 0.0 {
+                let b = if drag.from_index < drag.target_index {
+                    drag.target_index + 1
+                } else {
+                    drag.target_index
+                } as usize;
+                let prev_j = (b as i32 - 1).max(0) as usize;
+                let next_j = b.min(m.saturating_sub(1));
+                if j == prev_j && b > 0 {
+                    end_deg -= 2.4 * drag.pluck_progress;
+                }
+                if j == next_j && b < m {
+                    start_deg += 2.4 * drag.pluck_progress;
+                }
+            }
+        }
 
         let mut pb = PathBuilder::new();
         draw_floating_wedge(
@@ -171,6 +204,22 @@ pub fn draw_sub_ring(
         );
 
         let Some(path) = pb.finish() else { continue };
+
+        // Empty recessed socket for plucked segment
+        if let Some(drag) = drag_info {
+            if drag.from_index >= 0 && j as i32 == drag.from_index {
+                let mut socket_paint = Paint::default();
+                socket_paint.set_color(Color::from_rgba(0.0, 0.0, 0.0, 0.25 * alpha_mul).unwrap_or(Color::BLACK));
+                socket_paint.anti_alias = true;
+                pixmap.fill_path(&path, &socket_paint, FillRule::Winding, Transform::identity(), None);
+
+                let mut socket_stroke = Paint::default();
+                socket_stroke.set_color(Color::from_rgba(1.0, 1.0, 1.0, 0.14 * alpha_mul).unwrap_or(Color::WHITE));
+                socket_stroke.anti_alias = true;
+                pixmap.stroke_path(&path, &socket_stroke, &Stroke { width: 1.0, ..Default::default() }, Transform::identity(), None);
+                continue;
+            }
+        }
 
         // ── Fill & stroke ─────────────────────────────────────────────────────
         if is_hov && sub_closing_progress < 0.01 {
@@ -242,6 +291,29 @@ pub fn draw_sub_ring(
                                Transform::identity(), None);
         }
     }
+
+    // Draw illuminated neon insertion indicator line between subdial segments
+    if let Some(drag) = drag_info {
+        if drag.from_index >= 0 && drag.target_index >= 0 && drag.from_index != drag.target_index && drag.indicator_alpha > 0.005 {
+            let b = if drag.from_index < drag.target_index {
+                drag.target_index + 1
+            } else {
+                drag.target_index
+            } as usize;
+            let boundary_deg = start_angle_deg + b as f32 * slice_width_deg;
+            draw_drag_insertion_indicator(
+                pixmap,
+                cx,
+                cy,
+                SUB_INNER_R - 5.0,
+                SUB_OUTER_R + 8.0,
+                boundary_deg.to_radians(),
+                primary_col,
+                drag.indicator_alpha,
+                Transform::identity(),
+            );
+        }
+    }
 }
 
 // ─── Icon renderer ────────────────────────────────────────────────────────────
@@ -261,6 +333,7 @@ pub fn draw_sub_ring_icons(
     sub_closing_progress: f32,
     primary_col: Color,
     on_primary_col: Color,
+    drag_info: Option<SubRingDragInfo>,
 ) {
     let m = sub_slices.len();
     if m == 0 || reveal_progress <= 0.0 {
@@ -271,7 +344,16 @@ pub fn draw_sub_ring_icons(
     let mid_idx = (m - 1) as f32 / 2.0;
     let max_dist = mid_idx.max(0.5);
 
+    let is_sub_drag = drag_info.is_some();
+
     for j in 0..m {
+        if let Some(drag) = drag_info {
+            if drag.from_index >= 0 && j as i32 == drag.from_index {
+                // Plucked out; skip drawing normal icon and badge
+                continue;
+            }
+        }
+
         let norm_dist = ((j as f32 - mid_idx).abs() / max_dist).clamp(0.0, 1.0);
 
         let open_delay = norm_dist * 0.22;
@@ -292,7 +374,7 @@ pub fn draw_sub_ring_icons(
         let alpha = (open_alpha * close_alpha).clamp(0.0, 1.0);
         if alpha < 0.01 { continue; }
 
-        let is_hov = j as i32 == hovered_index;
+        let is_hov = j as i32 == hovered_index && !is_sub_drag;
         let r_lift = if is_hov { 5.0 * hover_factor } else { 0.0 };
 
         // Keep icon centered radially on the wedge as it blooms/retracts
@@ -332,6 +414,38 @@ pub fn draw_sub_ring_icons(
             );
         }
     }
+
+    // Draw the plucked floating folder wedge above the subdial tracking the cursor
+    if let Some(drag) = drag_info {
+        if drag.from_index >= 0 && (drag.from_index as usize) < sub_slices.len() && drag.pluck_progress > 0.01 {
+            let folder_slice = &sub_slices[drag.from_index as usize];
+            let dx = drag.cursor_x - cx;
+            let dy = drag.cursor_y - cy;
+            let pointer_angle_deg = dy.atan2(dx).to_degrees();
+            let badge_num = if drag.from_index < 9 && !folder_slice.is_add_button {
+                Some((drag.from_index + 1) as usize)
+            } else {
+                None
+            };
+            draw_plucked_floating_wedge(
+                font_renderer,
+                pixmap,
+                cx,
+                cy,
+                SUB_INNER_R,
+                SUB_OUTER_R,
+                slice_width_deg,
+                pointer_angle_deg,
+                CORNER_RADIUS_SUB,
+                &folder_slice.icon,
+                badge_num,
+                drag.pluck_progress,
+                primary_col,
+                on_primary_col,
+                Transform::identity(),
+            );
+        }
+    }
 }
 
 // ─── Combined pass ────────────────────────────────────────────────────────────
@@ -352,16 +466,17 @@ pub fn draw_sub_ring_with_icons(
     primary_col: Color,
     on_primary_col: Color,
     is_low_end: bool,
+    drag_info: Option<SubRingDragInfo>,
 ) {
     draw_sub_ring(
         pixmap, cx, cy, sub_slices, start_angle_deg, slice_width_deg,
         hovered_index, hover_factor, reveal_progress, sub_closing_progress,
-        primary_col, is_low_end,
+        primary_col, is_low_end, drag_info,
     );
     draw_sub_ring_icons(
         font_renderer, pixmap, cx, cy, sub_slices, start_angle_deg, slice_width_deg,
         hovered_index, hover_factor, reveal_progress, sub_closing_progress,
-        primary_col, on_primary_col,
+        primary_col, on_primary_col, drag_info,
     );
 }
 
@@ -384,7 +499,7 @@ mod tests {
 
         draw_sub_ring(
             &mut pixmap, 300.0, 300.0, &slices, -45.0, 22.5,
-            1, 1.0, 4.0, 0.0, primary, false,
+            1, 1.0, 4.0, 0.0, primary, false, None,
         );
 
         let non_zero = pixmap.pixels().iter().filter(|p| p.alpha() > 0).count();
@@ -404,7 +519,7 @@ mod tests {
         let count_alpha = |progress: f32| {
             let mut pm = Pixmap::new(600, 600).unwrap();
             draw_sub_ring(&mut pm, 300.0, 300.0, &slices, args.0, args.1,
-                          args.2, args.3, 3.0, progress, primary, false);
+                          args.2, args.3, 3.0, progress, primary, false, None);
             pm.pixels().iter().filter(|p| p.alpha() > 10).count()
         };
 
@@ -454,6 +569,7 @@ mod tests {
             primary,
             on_primary,
             false,
+            None,
         );
 
         let non_zero = pixmap.pixels().iter().filter(|p| p.alpha() > 0).count();

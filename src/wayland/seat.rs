@@ -292,6 +292,9 @@ impl SeatHandler {
             menu.drag.update_position(x, y);
             if menu.drag.threshold_met {
                 menu.drag.is_dragging = true;
+                menu.anim.drag_elapsed = 0.0;
+                menu.anim.drag_pluck_progress = 0.0;
+                menu.anim.drag_indicator_alpha = 0.0;
                 if menu.drag.is_sub_drag {
                     let valid_count = menu.config.file_jump_targets.len();
                     let total_slices = menu.sub_slices.len();
@@ -448,6 +451,9 @@ impl SeatHandler {
                     menu.finish_drag_reorder();
                     let _ = menu.config.save();
                 }
+                menu.anim.drag_pluck_progress = 0.0;
+                menu.anim.drag_indicator_alpha = 0.0;
+                menu.anim.drag_elapsed = 0.0;
                 menu.drag.reset();
                 self.click_handled_on_press = false;
                 return None;

@@ -63,6 +63,10 @@ pub struct RadialConfig {
     /// Tracks whether custom colors explicitly override system colors
     #[serde(rename = "hasExplicitColors", alias = "has_explicit_colors", default)]
     pub has_explicit_colors: bool,
+
+    /// Optional explicit path to save to (used for testing without overwriting user config)
+    #[serde(skip, default)]
+    pub custom_path: Option<std::path::PathBuf>,
 }
 
 fn default_global_slices() -> Vec<String> {
@@ -277,8 +281,24 @@ impl RadialConfig {
 
     /// Atomic write: write to temp file, then rename (prevents corruption)
     pub fn save(&self) -> anyhow::Result<()> {
-        let path = shellexpand::tilde("~/.config/radialMenu/config.json").to_string();
-        self.save_to(std::path::Path::new(&path))
+        if let Some(path) = &self.custom_path {
+            return self.save_to(path);
+        }
+        if let Ok(env_path) = std::env::var("RADIAL_CONFIG_PATH") {
+            if !env_path.is_empty() {
+                return self.save_to(std::path::Path::new(&env_path));
+            }
+        }
+        #[cfg(test)]
+        {
+            // In test mode without custom path, never overwrite real user config ~/.config/radialMenu/config.json!
+            return Ok(());
+        }
+        #[cfg(not(test))]
+        {
+            let path = shellexpand::tilde("~/.config/radialMenu/config.json").to_string();
+            self.save_to(std::path::Path::new(&path))
+        }
     }
 
     /// Atomic write to explicit path: write to temp file, then rename
@@ -433,6 +453,7 @@ impl Default for RadialConfig {
             custom_colors: None,
             colors: None,
             has_explicit_colors: false,
+            custom_path: None,
         }
     }
 }
@@ -695,5 +716,53 @@ mod tests {
 
         // Clean up
         let _ = std::fs::remove_dir_all(&test_dir);
+    }
+
+    #[test]
+    fn test_isolated_test_config_workflow_never_touches_real_user_config() {
+        let unique_name = format!("radial_isolated_test_{}.json", std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos());
+        let test_file = std::env::temp_dir().join(&unique_name);
+
+        // Record real user config content if it exists
+        let real_user_config_path = std::path::PathBuf::from(shellexpand::tilde("~/.config/radialMenu/config.json").to_string());
+        let before_content = if real_user_config_path.exists() {
+            Some(std::fs::read_to_string(&real_user_config_path).unwrap())
+        } else {
+            None
+        };
+
+        // Initialize isolated config pointing exclusively to test_file
+        let mut cfg = RadialConfig::default();
+        cfg.custom_path = Some(test_file.clone());
+        cfg.global_slices = vec!["action_a".into(), "action_b".into(), "action_c".into()];
+        let save_res = cfg.save();
+        assert!(save_res.is_ok());
+
+        // Verify test_file was written
+        assert!(test_file.exists());
+        let loaded = RadialConfig::load_from(&test_file);
+        assert_eq!(loaded.global_slices, vec!["action_a", "action_b", "action_c"]);
+
+        // Perform reordering on test config
+        cfg.reorder_slice("default", 0, 2);
+        assert_eq!(cfg.global_slices, vec!["action_b", "action_c", "action_a"]);
+        let save_res2 = cfg.save();
+        assert!(save_res2.is_ok());
+
+        // Verify loaded updated content from test_file
+        let loaded_reordered = RadialConfig::load_from(&test_file);
+        assert_eq!(loaded_reordered.global_slices, vec!["action_b", "action_c", "action_a"]);
+
+        // Clean up test file immediately
+        let remove_res = std::fs::remove_file(&test_file);
+        assert!(remove_res.is_ok());
+        assert!(!test_file.exists());
+
+        // Verify real user config was NEVER touched
+        if let Some(expected_before) = before_content {
+            let current_content = std::fs::read_to_string(&real_user_config_path).unwrap();
+            assert_eq!(current_content, expected_before, "Real user config must remain completely untouched!");
+        }
     }
 }

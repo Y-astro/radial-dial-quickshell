@@ -1,6 +1,26 @@
-#![allow(dead_code)]
+use crate::font::FontRenderer;
+use crate::renderer::text::{draw_icon, draw_number_badge};
+use tiny_skia::{
+    Color, FillRule, GradientStop, Paint, PathBuilder, Pixmap, Point, RadialGradient, SpreadMode,
+    Stroke, Transform,
+};
 
-use tiny_skia::PathBuilder;
+fn lighten_color(c: Color, factor: f32) -> Color {
+    let r = (c.red() * factor).min(1.0);
+    let g = (c.green() * factor).min(1.0);
+    let b = (c.blue() * factor).min(1.0);
+    Color::from_rgba(r, g, b, c.alpha()).unwrap_or(c)
+}
+
+fn darken_color(c: Color, factor: f32) -> Color {
+    Color::from_rgba(c.red() / factor, c.green() / factor, c.blue() / factor, c.alpha())
+        .unwrap_or(c)
+}
+
+fn fade_color(c: Color, alpha_mul: f32) -> Color {
+    Color::from_rgba(c.red(), c.green(), c.blue(), (c.alpha() * alpha_mul).clamp(0.0, 1.0))
+        .unwrap_or(c)
+}
 
 // Exact geometry constants from QML
 pub const HUB_RADIUS: f32 = 44.0;
@@ -197,16 +217,16 @@ pub fn get_slice_displacement(i: i32, n: i32, h: i32, factor: f32) -> SliceDisp 
     }
 }
 
-/// Renders a full ring of N wedges centered at (cx, cy).
-/// Returns a Vec of finished Paths (one per slice).
-/// Renders main ring wedges with per-slice blossoming animation.
-pub fn build_main_ring_paths_animated(
+/// Renders main ring wedges with per-slice blossoming animation and optional drag-reorder parting.
+pub fn build_main_ring_paths_animated_with_drag(
     cx: f32,
     cy: f32,
     slice_count: usize,
     hovered: i32,
     hover_factor: f32,
     reveal_progress: f32,
+    drag_boundary: Option<usize>,
+    drag_pluck: f32,
 ) -> Vec<(usize, tiny_skia::Path, f32)> {
     if slice_count == 0 {
         return Vec::new();
@@ -218,7 +238,21 @@ pub fn build_main_ring_paths_animated(
             continue;
         }
         let ease = if p >= 1.0 { 1.0 } else { 1.0 - (1.0 - p).powi(3) };
-        let disp = get_slice_displacement(i as i32, slice_count as i32, hovered, hover_factor);
+        let mut disp = get_slice_displacement(i as i32, slice_count as i32, hovered, hover_factor);
+
+        if let Some(b) = drag_boundary {
+            if drag_pluck > 0.0 && slice_count >= 2 {
+                let prev_slot = (b + slice_count - 1) % slice_count;
+                let next_slot = b % slice_count;
+                if i == prev_slot {
+                    disp.end_shift -= 2.6 * drag_pluck;
+                }
+                if i == next_slot {
+                    disp.start_shift += 2.6 * drag_pluck;
+                }
+            }
+        }
+
         let base_start = (i as f32 * 360.0 / slice_count as f32 - 90.0).to_radians();
         let base_end = ((i as f32 + 1.0) * 360.0 / slice_count as f32 - 90.0).to_radians();
         let th0 = base_start + disp.start_shift.to_radians();
@@ -241,6 +275,264 @@ pub fn build_main_ring_paths_animated(
         }
     }
     paths
+}
+
+/// Backwards-compatible wrapper: renders main ring wedges with per-slice blossoming animation.
+pub fn build_main_ring_paths_animated(
+    cx: f32,
+    cy: f32,
+    slice_count: usize,
+    hovered: i32,
+    hover_factor: f32,
+    reveal_progress: f32,
+) -> Vec<(usize, tiny_skia::Path, f32)> {
+    build_main_ring_paths_animated_with_drag(
+        cx,
+        cy,
+        slice_count,
+        hovered,
+        hover_factor,
+        reveal_progress,
+        None,
+        0.0,
+    )
+}
+
+/// Draws an illuminated neon insertion indicator line between segments to indicate where a dragged segment will drop.
+/// Includes ambient glow, bright inner glow, core line, and circular luminous terminal beads at both inner and outer ends.
+pub fn draw_drag_insertion_indicator(
+    pixmap: &mut Pixmap,
+    cx: f32,
+    cy: f32,
+    r_inner: f32,
+    r_outer: f32,
+    boundary_angle_rad: f32,
+    primary_col: Color,
+    alpha_mul: f32,
+    transform: Transform,
+) {
+    if alpha_mul <= 0.005 {
+        return;
+    }
+    let cos_a = boundary_angle_rad.cos();
+    let sin_a = boundary_angle_rad.sin();
+
+    let x_in = cx + r_inner * cos_a;
+    let y_in = cy + r_inner * sin_a;
+    let x_out = cx + r_outer * cos_a;
+    let y_out = cy + r_outer * sin_a;
+
+    let mut pb = PathBuilder::new();
+    pb.move_to(x_in, y_in);
+    pb.line_to(x_out, y_out);
+    let Some(line_path) = pb.finish() else { return };
+
+    // 1. Wide ambient soft glow
+    let ambient_col = fade_color(primary_col, 0.22 * alpha_mul);
+    let mut ambient_paint = Paint::default();
+    ambient_paint.set_color(ambient_col);
+    ambient_paint.anti_alias = true;
+    let ambient_stroke = Stroke {
+        width: 14.0,
+        ..Default::default()
+    };
+    pixmap.stroke_path(&line_path, &ambient_paint, &ambient_stroke, transform, None);
+
+    // 2. Focused vibrant inner glow
+    let inner_col = fade_color(lighten_color(primary_col, 1.3), 0.60 * alpha_mul);
+    let mut inner_paint = Paint::default();
+    inner_paint.set_color(inner_col);
+    inner_paint.anti_alias = true;
+    let inner_stroke = Stroke {
+        width: 5.5,
+        ..Default::default()
+    };
+    pixmap.stroke_path(&line_path, &inner_paint, &inner_stroke, transform, None);
+
+    // 3. Ultra-bright neon core line
+    let core_col = fade_color(Color::from_rgba8(255, 255, 255, 245), alpha_mul);
+    let mut core_paint = Paint::default();
+    core_paint.set_color(core_col);
+    core_paint.anti_alias = true;
+    let core_stroke = Stroke {
+        width: 2.2,
+        ..Default::default()
+    };
+    pixmap.stroke_path(&line_path, &core_paint, &core_stroke, transform, None);
+
+    // 4. Outer terminal bead (luminous circular diamond at outer edge)
+    let bead_outer_r = 4.5;
+    let mut bead_out_pb = PathBuilder::new();
+    bead_out_pb.push_circle(x_out, y_out, bead_outer_r);
+    if let Some(bead_path) = bead_out_pb.finish() {
+        let mut bead_glow = Paint::default();
+        bead_glow.set_color(fade_color(primary_col, 0.75 * alpha_mul));
+        bead_glow.anti_alias = true;
+        pixmap.fill_path(&bead_path, &bead_glow, FillRule::Winding, transform, None);
+
+        let mut bead_core_pb = PathBuilder::new();
+        bead_core_pb.push_circle(x_out, y_out, 2.4);
+        if let Some(core_path) = bead_core_pb.finish() {
+            let mut bead_core = Paint::default();
+            bead_core.set_color(fade_color(Color::WHITE, 0.95 * alpha_mul));
+            bead_core.anti_alias = true;
+            pixmap.fill_path(&core_path, &bead_core, FillRule::Winding, transform, None);
+        }
+    }
+
+    // 5. Inner terminal bead (accent pip at inner edge)
+    let bead_inner_r = 3.2;
+    let mut bead_in_pb = PathBuilder::new();
+    bead_in_pb.push_circle(x_in, y_in, bead_inner_r);
+    if let Some(bead_path) = bead_in_pb.finish() {
+        let mut bead_paint = Paint::default();
+        bead_paint.set_color(fade_color(lighten_color(primary_col, 1.25), 0.85 * alpha_mul));
+        bead_paint.anti_alias = true;
+        pixmap.fill_path(&bead_path, &bead_paint, FillRule::Winding, transform, None);
+    }
+}
+
+/// Draws the "plucked" segment floating above the dial tracking the pointer cursor.
+/// Features an elevated drop shadow, vibrant gradient wedge body, luminous highlight border,
+/// centered icon, and optional number badge.
+pub fn draw_plucked_floating_wedge(
+    font_renderer: &mut FontRenderer,
+    pixmap: &mut Pixmap,
+    cx: f32,
+    cy: f32,
+    base_inner_r: f32,
+    base_outer_r: f32,
+    slice_width_deg: f32,
+    pointer_angle_deg: f32,
+    corner_radius: f32,
+    icon: &str,
+    badge_number: Option<usize>,
+    pluck_factor: f32,
+    primary_col: Color,
+    on_primary_col: Color,
+    transform: Transform,
+) {
+    let pluck = pluck_factor.clamp(0.0, 1.3);
+    if pluck <= 0.01 {
+        return;
+    }
+
+    // Floating elevation: segment lifts radially outwards
+    let r_inner = base_inner_r + 4.0 * pluck;
+    let r_outer = base_outer_r + 14.0 * pluck;
+
+    let th0 = (pointer_angle_deg - slice_width_deg * 0.5).to_radians();
+    let th1 = (pointer_angle_deg + slice_width_deg * 0.5).to_radians();
+
+    // 1. Drop shadow underneath the elevated segment
+    let shadow_offset_x = 3.0 * pluck;
+    let shadow_offset_y = 6.0 * pluck;
+    let mut shadow_pb = PathBuilder::new();
+    draw_floating_wedge(
+        &mut shadow_pb,
+        cx + shadow_offset_x,
+        cy + shadow_offset_y,
+        r_inner - 1.5,
+        r_outer + 3.0,
+        th0,
+        th1,
+        corner_radius + 1.0,
+    );
+    if let Some(shadow_path) = shadow_pb.finish() {
+        let mut shadow_paint = Paint::default();
+        shadow_paint.set_color(Color::from_rgba8(0, 0, 0, (90.0 * pluck.min(1.0)) as u8));
+        shadow_paint.anti_alias = true;
+        pixmap.fill_path(&shadow_path, &shadow_paint, FillRule::Winding, transform, None);
+    }
+
+    // 2. Floating wedge body
+    let mut wedge_pb = PathBuilder::new();
+    draw_floating_wedge(
+        &mut wedge_pb,
+        cx,
+        cy,
+        r_inner,
+        r_outer,
+        th0,
+        th1,
+        corner_radius,
+    );
+    let Some(wedge_path) = wedge_pb.finish() else { return };
+
+    let light_col = lighten_color(primary_col, 1.40);
+    let dark_col = darken_color(primary_col, 1.20);
+    let grad = RadialGradient::new(
+        Point::from_xy(cx, cy),
+        Point::from_xy(cx, cy),
+        r_outer + 12.0,
+        vec![
+            GradientStop::new(0.0, light_col),
+            GradientStop::new(0.35, primary_col),
+            GradientStop::new(1.0, dark_col),
+        ],
+        SpreadMode::Pad,
+        Transform::identity(),
+    );
+    let mut wedge_paint = Paint::default();
+    wedge_paint.anti_alias = true;
+    if let Some(shader) = grad {
+        wedge_paint.shader = shader;
+    } else {
+        wedge_paint.set_color(primary_col);
+    }
+    pixmap.fill_path(&wedge_path, &wedge_paint, FillRule::Winding, transform, None);
+
+    // 3. Frosted highlight sheen on top of wedge
+    let mut sheen_paint = Paint::default();
+    sheen_paint.set_color(Color::from_rgba(1.0, 1.0, 1.0, 0.12).unwrap_or(Color::WHITE));
+    sheen_paint.anti_alias = true;
+    pixmap.fill_path(&wedge_path, &sheen_paint, FillRule::Winding, transform, None);
+
+    // 4. Luminous elevated border stroke
+    let mut stroke_paint = Paint::default();
+    stroke_paint.set_color(Color::from_rgba(light_col.red(), light_col.green(), light_col.blue(), 0.95).unwrap_or(light_col));
+    stroke_paint.anti_alias = true;
+    let stroke = Stroke {
+        width: 2.2,
+        ..Default::default()
+    };
+    pixmap.stroke_path(&wedge_path, &stroke_paint, &stroke, transform, None);
+
+    // 5. Centered Icon and Number Badge
+    let mid_rad = pointer_angle_deg.to_radians();
+    let icon_r = (r_inner + r_outer) * 0.5;
+    let raw_icon_x = cx + icon_r * mid_rad.cos();
+    let raw_icon_y = cy + icon_r * mid_rad.sin();
+
+    // Map through transform
+    let icon_x = transform.sx * raw_icon_x + transform.kx * raw_icon_y + transform.tx;
+    let icon_y = transform.ky * raw_icon_x + transform.sy * raw_icon_y + transform.ty;
+
+    let icon_size = 28.0 * (1.0 + 0.08 * pluck.min(1.0));
+    draw_icon(
+        font_renderer,
+        pixmap,
+        icon,
+        icon_x,
+        icon_y,
+        icon_size,
+        on_primary_col,
+    );
+
+    if let Some(num) = badge_number {
+        let badge_x = icon_x + 12.0;
+        let badge_y = icon_y - 12.0;
+        draw_number_badge(
+            font_renderer,
+            pixmap,
+            num,
+            badge_x,
+            badge_y,
+            true,
+            primary_col,
+            on_primary_col,
+        );
+    }
 }
 
 /// Renders main ring wedges as a Vec of finished Paths (one per slice).
@@ -440,5 +732,63 @@ mod tests {
             "Rendered pixels: {}",
             non_zero_pixels
         );
+    }
+
+    #[test]
+    fn test_main_ring_paths_drag_parting() {
+        let paths = build_main_ring_paths_animated_with_drag(
+            272.0, 272.0, 8, -1, 0.0, 8.0, Some(2), 1.0,
+        );
+        assert_eq!(paths.len(), 8);
+        for (_, p, _) in &paths {
+            assert!(p.bounds().width() > 0.0);
+            assert!(p.bounds().height() > 0.0);
+        }
+    }
+
+    #[test]
+    fn test_draw_drag_insertion_indicator_renders() {
+        let mut pixmap = Pixmap::new(600, 600).unwrap();
+        let primary = Color::from_rgba8(137, 180, 250, 255);
+        draw_drag_insertion_indicator(
+            &mut pixmap,
+            300.0,
+            300.0,
+            50.0,
+            150.0,
+            0.0,
+            primary,
+            1.0,
+            Transform::identity(),
+        );
+        let non_zero = pixmap.pixels().iter().filter(|p| p.alpha() > 0).count();
+        assert!(non_zero > 100, "Insertion indicator should render luminous pixels");
+    }
+
+    #[test]
+    fn test_draw_plucked_floating_wedge_renders() {
+        let mut pixmap = Pixmap::new(600, 600).unwrap();
+        let mut font_renderer = FontRenderer::new();
+        let primary = Color::from_rgba8(137, 180, 250, 255);
+        let on_primary = Color::from_rgba8(17, 17, 27, 255);
+        draw_plucked_floating_wedge(
+            &mut font_renderer,
+            &mut pixmap,
+            300.0,
+            300.0,
+            54.0,
+            148.0,
+            45.0,
+            0.0,
+            6.0,
+            "folder",
+            Some(1),
+            1.0,
+            primary,
+            on_primary,
+            Transform::identity(),
+        );
+        let non_zero = pixmap.pixels().iter().filter(|p| p.alpha() > 0).count();
+        assert!(non_zero > 1000, "Plucked wedge should render shadow, body, and icon");
     }
 }

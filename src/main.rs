@@ -55,10 +55,11 @@ use renderer::customizer::{CustomizerColors, CustomizerMode, CustomizerState};
 use renderer::folder_browser::FolderBrowserState;
 use renderer::hub::draw_center_hub;
 use renderer::pie::{
-    build_main_ring_paths_animated, get_slice_displacement, ICON_RADIUS, SLICE_OUTER_R,
-    TOTAL_RADIUS,
+    build_main_ring_paths_animated_with_drag, draw_drag_insertion_indicator,
+    draw_plucked_floating_wedge, get_slice_displacement, CORNER_RADIUS_MAIN, ICON_RADIUS,
+    SLICE_INNER_R, SLICE_OUTER_R, TOTAL_RADIUS,
 };
-use renderer::subring::draw_sub_ring_with_icons;
+use renderer::subring::{draw_sub_ring_with_icons, SubRingDragInfo};
 use renderer::text::{draw_icon, draw_number_badge};
 use state::actions::execute as execute_action;
 use state::anim::Easing;
@@ -1595,13 +1596,31 @@ impl App {
             return true;
         }
 
-        let hovered = if self.menu.drag.is_dragging && !self.menu.drag.is_sub_drag {
-            self.menu.drag.target_index
+        let is_main_drag = self.menu.drag.is_dragging && !self.menu.drag.is_sub_drag;
+        let is_sub_drag = self.menu.drag.is_dragging && self.menu.drag.is_sub_drag;
+
+        let drag_boundary = if is_main_drag
+            && self.menu.drag.from_index >= 0
+            && self.menu.drag.target_index >= 0
+            && self.menu.drag.from_index != self.menu.drag.target_index
+        {
+            let b = if self.menu.drag.from_index < self.menu.drag.target_index {
+                self.menu.drag.target_index + 1
+            } else {
+                self.menu.drag.target_index
+            } as usize;
+            Some(b % slice_count)
+        } else {
+            None
+        };
+
+        let hovered = if is_main_drag {
+            -1
         } else {
             self.menu.hovered_index
         };
-        let hover_factor = if self.menu.drag.is_dragging && !self.menu.drag.is_sub_drag {
-            1.0
+        let hover_factor = if is_main_drag {
+            0.0
         } else {
             self.menu.anim.hover_factor
         };
@@ -1621,17 +1640,34 @@ impl App {
         let modal_active = self.folder_browser.is_some() || self.customizer.is_some();
 
         if !modal_active {
-            // 1. Draw Main Ring Wedges (with blossom animation & frosted glass styling)
-            let animated_wedges = build_main_ring_paths_animated(
+            // 1. Draw Main Ring Wedges (with blossom animation, drag parting & frosted glass styling)
+            let animated_wedges = build_main_ring_paths_animated_with_drag(
                 cx,
                 cy,
                 slice_count,
                 hovered,
                 hover_factor,
                 self.menu.anim.reveal_progress,
+                drag_boundary,
+                self.menu.anim.drag_pluck_progress,
             );
 
             for (i, path, _p) in animated_wedges {
+                if is_main_drag && i as i32 == self.menu.drag.from_index {
+                    // Empty recessed socket for plucked segment
+                    let mut socket_paint = Paint::default();
+                    socket_paint.set_color(Color::from_rgba(0.0, 0.0, 0.0, 0.25 * global_opacity).unwrap_or(Color::BLACK));
+                    socket_paint.anti_alias = true;
+                    pixmap.fill_path(&path, &socket_paint, tiny_skia::FillRule::Winding, global_xform, None);
+
+                    let mut socket_stroke = Paint::default();
+                    socket_stroke.set_color(Color::from_rgba(1.0, 1.0, 1.0, 0.14 * global_opacity).unwrap_or(Color::WHITE));
+                    socket_stroke.anti_alias = true;
+                    let stroke = Stroke { width: 1.0, ..Default::default() };
+                    pixmap.stroke_path(&path, &socket_stroke, &stroke, global_xform, None);
+                    continue;
+                }
+
                 let is_hovered = i as i32 == hovered;
                 let is_parent_of_sub = i as i32 == self.menu.parent_slice_index && self.menu.active_sub_tier.is_some();
                 let mut paint = Paint::default();
@@ -1744,16 +1780,50 @@ impl App {
                 }
             }
 
+            // Draw illuminated neon insertion indicator line between main ring slices
+            if let Some(b) = drag_boundary {
+                if self.menu.anim.drag_indicator_alpha > 0.005 {
+                    let boundary_deg = b as f32 * (360.0 / slice_count as f32) - 90.0;
+                    draw_drag_insertion_indicator(
+                        pixmap,
+                        cx,
+                        cy,
+                        SLICE_INNER_R - 6.0,
+                        SLICE_OUTER_R + 8.0,
+                        boundary_deg.to_radians(),
+                        primary_col,
+                        self.menu.anim.drag_indicator_alpha * global_opacity,
+                        global_xform,
+                    );
+                }
+            }
+
             // 2. Draw Main Ring Icons & Number Badges
             let slice_angle = 360.0 / slice_count as f32;
             for (i, slice) in self.menu.current_slices.iter().enumerate() {
+                if is_main_drag && i as i32 == self.menu.drag.from_index {
+                    // Item was plucked out; skip normal icon and badge
+                    continue;
+                }
                 let p = (self.menu.anim.reveal_progress - i as f32).clamp(0.0, 1.0);
                 if p <= 0.01 {
                     continue;
                 }
                 let ease = if p >= 1.0 { 1.0 } else { 1.0 - (1.0 - p).powi(3) };
 
-                let disp = get_slice_displacement(i as i32, slice_count as i32, hovered, hover_factor);
+                let mut disp = get_slice_displacement(i as i32, slice_count as i32, hovered, hover_factor);
+                if let Some(b) = drag_boundary {
+                    if self.menu.anim.drag_pluck_progress > 0.0 && slice_count >= 2 {
+                        let prev_slot = (b + slice_count - 1) % slice_count;
+                        let next_slot = b % slice_count;
+                        if i == prev_slot {
+                            disp.end_shift -= 2.6 * self.menu.anim.drag_pluck_progress;
+                        }
+                        if i == next_slot {
+                            disp.start_shift += 2.6 * self.menu.anim.drag_pluck_progress;
+                        }
+                    }
+                }
                 let base_start = i as f32 * slice_angle - 90.0;
                 let base_end = (i as f32 + 1.0) * slice_angle - 90.0;
 
@@ -1789,6 +1859,36 @@ impl App {
                 }
             }
 
+            // Draw the plucked floating wedge above the main ring tracking cursor
+            if is_main_drag && self.menu.drag.from_index >= 0 && (self.menu.drag.from_index as usize) < self.menu.current_slices.len() && self.menu.anim.drag_pluck_progress > 0.01 {
+                let from_slice = &self.menu.current_slices[self.menu.drag.from_index as usize];
+                let dx = self.menu.drag.current_x - cx;
+                let dy = self.menu.drag.current_y - cy;
+                let pointer_angle_deg = dy.atan2(dx).to_degrees();
+                let badge_num = if (self.menu.drag.from_index as usize) < 9 {
+                    Some((self.menu.drag.from_index as usize) + 1)
+                } else {
+                    None
+                };
+                draw_plucked_floating_wedge(
+                    &mut self.font_renderer,
+                    pixmap,
+                    cx,
+                    cy,
+                    SLICE_INNER_R,
+                    SLICE_OUTER_R,
+                    slice_angle,
+                    pointer_angle_deg,
+                    CORNER_RADIUS_MAIN,
+                    &from_slice.icon,
+                    badge_num,
+                    self.menu.anim.drag_pluck_progress,
+                    primary_col,
+                    on_primary_col,
+                    global_xform,
+                );
+            }
+
             // 3. Draw Sub-Ring if active OR if it's still animating closed
             // Safety guard: parent_slice_index MUST be valid (>= 0) to position the sub-ring over its parent slice!
             let sub_is_visible = self.menu.parent_slice_index >= 0
@@ -1809,10 +1909,22 @@ impl App {
                 } else {
                     0.0
                 };
-                let (sub_hovered, sub_hover_factor) = if self.menu.drag.is_dragging && self.menu.drag.is_sub_drag {
-                    (self.menu.drag.target_index, 1.0)
+                let (sub_hovered, sub_hover_factor) = if is_sub_drag {
+                    (-1, 0.0)
                 } else {
                     (self.menu.outer_hovered_index, self.menu.anim.outer_hover_factor)
+                };
+                let sub_drag_info = if is_sub_drag {
+                    Some(SubRingDragInfo {
+                        from_index: self.menu.drag.from_index,
+                        target_index: self.menu.drag.target_index,
+                        pluck_progress: self.menu.anim.drag_pluck_progress,
+                        indicator_alpha: self.menu.anim.drag_indicator_alpha,
+                        cursor_x: self.menu.drag.current_x,
+                        cursor_y: self.menu.drag.current_y,
+                    })
+                } else {
+                    None
                 };
                 draw_sub_ring_with_icons(
                     &mut self.font_renderer,
@@ -1829,6 +1941,7 @@ impl App {
                     primary_col,
                     on_primary_col,
                     self.menu.is_low_end_gpu,
+                    sub_drag_info,
                 );
             }
 
@@ -1969,6 +2082,30 @@ impl App {
                 }
             }
             MenuPhase::Open => {
+                // Drag-reorder animations: segment pluck spring and neon insertion line fade
+                if self.menu.drag.is_dragging {
+                    self.menu.anim.drag_elapsed += dt;
+                    let pluck_dur = if self.menu.is_low_end_gpu { 60.0 } else { 120.0 };
+                    let t_pluck = (self.menu.anim.drag_elapsed / pluck_dur).clamp(0.0, 1.0);
+                    let target_pluck = if self.menu.is_low_end_gpu { 1.0 } else { Easing::OutBack(1.25).value(t_pluck) };
+                    if (target_pluck - self.menu.anim.drag_pluck_progress).abs() > 0.002 {
+                        self.menu.anim.drag_pluck_progress = target_pluck;
+                        self.dirty = true;
+                    }
+                    let ind_dur = if self.menu.is_low_end_gpu { 40.0 } else { 80.0 };
+                    let t_ind = (self.menu.anim.drag_elapsed / ind_dur).clamp(0.0, 1.0);
+                    let target_ind = Easing::OutCubic.value(t_ind);
+                    if (target_ind - self.menu.anim.drag_indicator_alpha).abs() > 0.002 {
+                        self.menu.anim.drag_indicator_alpha = target_ind;
+                        self.dirty = true;
+                    }
+                } else if self.menu.anim.drag_pluck_progress > 0.0 || self.menu.anim.drag_indicator_alpha > 0.0 {
+                    self.menu.anim.drag_pluck_progress = 0.0;
+                    self.menu.anim.drag_indicator_alpha = 0.0;
+                    self.menu.anim.drag_elapsed = 0.0;
+                    self.dirty = true;
+                }
+
                 // Phase 1: Main ring hover spring — 110ms OutBack(1.35) (was 160ms OutBack(1.25))
                 if self.menu.hovered_index >= 0 {
                     self.menu.anim.hover_elapsed = (self.menu.anim.hover_elapsed + dt).min(110.0);

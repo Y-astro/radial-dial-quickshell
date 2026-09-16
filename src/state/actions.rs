@@ -1251,10 +1251,14 @@ pub fn get_command(action: &ActionId) -> Option<String> {
             n, n
         )),
         ActionId::SwitchToTab(idx) => {
-            if *idx >= 1 && *idx <= 8 {
+            if *idx >= 1 && *idx <= 9 {
                 Some(format!("wtype -M alt -k {} -m alt", idx))
             } else {
-                Some("wtype -M alt -k 1 -m alt".into())
+                let mut cmd = "wtype -M alt -k 1 -m alt".to_string();
+                for _ in 1..*idx {
+                    cmd.push_str(" && sleep 0.03 && wtype -M ctrl -k Tab -m ctrl");
+                }
+                Some(cmd)
             }
         },
         ActionId::PasteClip(id) => Some(format!("cliphist decode {} | wl-copy && sleep 0.05 && wtype -M ctrl -k v -m ctrl", id)),
@@ -1622,8 +1626,13 @@ mod tests {
         let tab9 = ActionId::SwitchToTab(9);
         assert_eq!(
             get_command(&tab9),
-            Some("wtype -M alt -k 1 -m alt".into())
+            Some("wtype -M alt -k 9 -m alt".into())
         );
+
+        let tab12 = ActionId::SwitchToTab(12);
+        let cmd12 = get_command(&tab12).unwrap();
+        assert!(cmd12.starts_with("wtype -M alt -k 1 -m alt"));
+        assert!(cmd12.contains("ctrl -k Tab"));
 
         let paste = ActionId::PasteClip("42".into());
         assert_eq!(

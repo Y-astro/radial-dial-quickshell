@@ -156,7 +156,13 @@ impl MenuState {
     pub fn sub_slice_width(&self) -> f32 {
         let count = self.sub_slices.len() as f32;
         if count > 0.0 {
-            (110.0 / count).clamp(22.0, 36.0)
+            if count <= 4.0 {
+                (110.0 / count).clamp(26.0, 36.0)
+            } else if count <= 8.0 {
+                (176.0 / count).clamp(20.0, 26.0)
+            } else {
+                (260.0 / count).clamp(12.0, 20.0)
+            }
         } else {
             28.0
         }
@@ -231,6 +237,12 @@ impl MenuState {
             })
             .collect();
 
+        if self.context == Context::Browser {
+            self.refresh_browser_tabs();
+        } else {
+            self.browser_tabs.clear();
+        }
+
         self.phase = MenuPhase::Opening;
         self.flick_mode_armed = true;
         self.flick_open_time = std::time::Instant::now();
@@ -276,6 +288,9 @@ impl MenuState {
 
     /// Open concentric sub-tier for the specified parent slice index
     pub fn open_sub_tier(&mut self, parent_index: i32, tier: SubTierType) {
+        if tier == SubTierType::BrowserTabs && self.context == Context::Browser {
+            self.refresh_browser_tabs();
+        }
         self.active_sub_tier = Some(tier);
         self.parent_slice_index = parent_index;
         self.sub_slices = self.generate_sub_slices(tier);
@@ -335,9 +350,37 @@ impl MenuState {
             .collect();
     }
 
+    /// Refresh open browser tabs on-demand for the current window to minimize background resource usage
+    pub fn refresh_browser_tabs(&mut self) {
+        let win_pid = if self.active_window_pid > 0 {
+            self.active_window_pid
+        } else {
+            self.window_info.pid
+        };
+        let win_title = if !self.active_window_title.is_empty() {
+            &self.active_window_title
+        } else {
+            &self.window_info.title
+        };
+        self.browser_tabs = crate::ipc::tabs_shm::get_browser_tabs_for_window(
+            win_pid,
+            &self.window_info.class,
+            win_title,
+        );
+        log::info!(
+            "Refreshed browser tabs for window (class={}, pid={}): found {} tabs",
+            self.window_info.class,
+            win_pid,
+            self.browser_tabs.len()
+        );
+    }
+
     /// Re-generates sub slices for the active sub tier if open
     pub fn refresh_sub_slices(&mut self) {
         if let Some(tier) = self.active_sub_tier {
+            if tier == SubTierType::BrowserTabs && self.context == Context::Browser {
+                self.refresh_browser_tabs();
+            }
             self.sub_slices = self.generate_sub_slices(tier);
         }
     }
@@ -551,7 +594,7 @@ impl MenuState {
                         .enumerate()
                         .map(|(i, tab)| {
                             let idx = if tab.index > 0 { tab.index } else { i + 1 };
-                            let icon = if idx <= 8 {
+                            let icon = if idx <= 9 {
                                 format!("counter_{}", idx)
                             } else {
                                 "tab".to_string()
@@ -568,18 +611,21 @@ impl MenuState {
                         })
                         .collect()
                 } else {
-                    (1..=8)
-                        .map(|i| {
-                            let mut item = SliceItem::new(
-                                format!("browser_tab_{}", i),
-                                format!("Tab {}", i),
-                                format!("counter_{}", i),
-                                i - 1,
-                            );
-                            item.action = Some(ActionId::SwitchToTab(i));
-                            item
-                        })
-                        .collect()
+                    let win_title = if !self.active_window_title.is_empty() {
+                        self.active_window_title.clone()
+                    } else if !self.window_info.title.is_empty() {
+                        self.window_info.title.clone()
+                    } else {
+                        "Tab 1".to_string()
+                    };
+                    let mut item = SliceItem::new(
+                        "browser_tab_1".to_string(),
+                        win_title,
+                        "counter_1".to_string(),
+                        0,
+                    );
+                    item.action = Some(ActionId::SwitchToTab(1));
+                    vec![item]
                 }
             }
 
@@ -987,6 +1033,83 @@ mod tests {
         assert_eq!(subs[0].action, Some(ActionId::SwitchToTab(1)));
         assert_eq!(subs[1].label, "YouTube");
         assert_eq!(subs[1].action, Some(ActionId::SwitchToTab(2)));
+
+        // Test fallback when browser_tabs is empty: returns 1 tab for active window, not 8!
+        menu.browser_tabs.clear();
+        menu.active_window_title = "My Single Tab Window".into();
+        let fallback_subs = menu.generate_sub_slices(SubTierType::BrowserTabs);
+        assert_eq!(fallback_subs.len(), 1);
+        assert_eq!(fallback_subs[0].label, "My Single Tab Window");
+        assert_eq!(fallback_subs[0].action, Some(ActionId::SwitchToTab(1)));
+
+        // Test with 4 dynamic tabs (like user's Firefox screenshot)
+        menu.browser_tabs = vec![
+            BrowserTab { index: 1, title: "WhatsApp".into(), url: "".into(), active: false, id: Some(1) },
+            BrowserTab { index: 2, title: "Google Gemini".into(), url: "".into(), active: false, id: Some(2) },
+            BrowserTab { index: 3, title: "OS UNIT 1.pdf".into(), url: "".into(), active: false, id: Some(3) },
+            BrowserTab { index: 4, title: "YouTube".into(), url: "".into(), active: true, id: Some(4) },
+        ];
+        let four_subs = menu.generate_sub_slices(SubTierType::BrowserTabs);
+        assert_eq!(four_subs.len(), 4);
+        assert_eq!(four_subs[0].label, "WhatsApp");
+        assert_eq!(four_subs[1].label, "Google Gemini");
+        assert_eq!(four_subs[2].label, "OS UNIT 1.pdf");
+        assert_eq!(four_subs[3].label, "YouTube");
+    }
+
+    #[test]
+    fn test_dynamic_browser_tabs_per_browser() {
+        let mut menu = MenuState::new(RadialConfig::default(), false);
+
+        // 1. Open on Terminal: browser_tabs must be empty, no resource consumption
+        let kitty_ctx = make_test_context("kitty", "~");
+        menu.transition_open(kitty_ctx);
+        assert_eq!(menu.context, Context::Terminal);
+        assert!(menu.browser_tabs.is_empty());
+
+        // 2. Open on Browser 1 (Zen with 3 mock tabs via SHM)
+        let zen_tabs = vec![
+            BrowserTab { index: 1, title: "Zen Tab 1".into(), url: "".into(), active: true, id: Some(1) },
+            BrowserTab { index: 2, title: "Zen Tab 2".into(), url: "".into(), active: false, id: Some(2) },
+            BrowserTab { index: 3, title: "Zen Tab 3".into(), url: "".into(), active: false, id: Some(3) },
+        ];
+        let zen_shm = "/dev/shm/browser_tabs_9991.json";
+        let _ = crate::ipc::tabs_shm::write_tabs_atomically(zen_shm, &zen_tabs);
+
+        let mut zen_ctx = make_test_context("zen-browser", "Zen Tab 1");
+        zen_ctx.window.pid = 9991;
+        menu.transition_open(zen_ctx);
+        assert_eq!(menu.context, Context::Browser);
+        assert_eq!(menu.browser_tabs.len(), 3);
+        assert_eq!(menu.browser_tabs[0].title, "Zen Tab 1");
+
+        let zen_subs = menu.generate_sub_slices(SubTierType::BrowserTabs);
+        assert_eq!(zen_subs.len(), 3);
+
+        // 3. Open on Browser 2 (Firefox with 5 mock tabs via SHM)
+        let ff_tabs = vec![
+            BrowserTab { index: 1, title: "FF Tab 1".into(), url: "".into(), active: false, id: Some(1) },
+            BrowserTab { index: 2, title: "FF Tab 2".into(), url: "".into(), active: false, id: Some(2) },
+            BrowserTab { index: 3, title: "FF Tab 3".into(), url: "".into(), active: false, id: Some(3) },
+            BrowserTab { index: 4, title: "FF Tab 4".into(), url: "".into(), active: false, id: Some(4) },
+            BrowserTab { index: 5, title: "FF Tab 5".into(), url: "".into(), active: true, id: Some(5) },
+        ];
+        let ff_shm = "/dev/shm/browser_tabs_9992.json";
+        let _ = crate::ipc::tabs_shm::write_tabs_atomically(ff_shm, &ff_tabs);
+
+        let mut ff_ctx = make_test_context("firefox", "FF Tab 5");
+        ff_ctx.window.pid = 9992;
+        menu.transition_open(ff_ctx);
+        assert_eq!(menu.context, Context::Browser);
+        assert_eq!(menu.browser_tabs.len(), 5);
+        assert_eq!(menu.browser_tabs[4].title, "FF Tab 5");
+
+        let ff_subs = menu.generate_sub_slices(SubTierType::BrowserTabs);
+        assert_eq!(ff_subs.len(), 5);
+
+        // Cleanup test shm files
+        let _ = std::fs::remove_file(zen_shm);
+        let _ = std::fs::remove_file(ff_shm);
     }
 
     #[test]

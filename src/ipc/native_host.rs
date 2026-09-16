@@ -93,6 +93,13 @@ pub fn process_incoming_payload(payload: &[u8], target_path: &Path) -> Result<us
     write_tabs_atomically(target_path, &serialized)
         .map_err(|e| format!("Atomic write error: {e}"))?;
 
+    // Also write to PID-specific path so multiple browsers / windows maintain separate tabs
+    let ppid = unsafe { libc::getppid() };
+    if ppid > 1 {
+        let pid_path = format!("/dev/shm/browser_tabs_{}.json", ppid);
+        let _ = write_tabs_atomically(Path::new(&pid_path), &serialized);
+    }
+
     Ok(count)
 }
 

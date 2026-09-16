@@ -263,6 +263,23 @@ impl SeatHandler {
             menu.cursor_moved_flick = true;
         }
 
+        // Handle adding slice cursor tracking around main dial
+        if let Some(adding) = &mut menu.adding_slice {
+            adding.current_x = x;
+            adding.current_y = y;
+            let slice_count = menu.current_slices.len().max(1);
+            let slice_angle = 360.0 / slice_count as f32;
+            let raw_angle = dy.atan2(dx).to_degrees();
+            let clock_angle = (raw_angle + 90.0).rem_euclid(360.0);
+            let clock_shifted = (clock_angle + slice_angle * 0.5).rem_euclid(360.0);
+            let target_index = ((clock_shifted / slice_angle).floor() as usize) % slice_count;
+            adding.target_index = target_index;
+            menu.hovered_index = -1;
+            menu.center_hovered = false;
+            menu.outer_hovered_index = -1;
+            return;
+        }
+
         // Handle drag-to-reorder if dragging
         if menu.drag.is_dragging {
             menu.drag.update_position(x, y);
@@ -417,6 +434,20 @@ impl SeatHandler {
         }
 
         if state == ButtonState::Pressed {
+            // Drop slice being added into the dial at the target location!
+            if let Some(adding) = menu.adding_slice.take() {
+                menu.config.insert_slice(&menu.context.to_string(), adding.target_index, &adding.action_id);
+                let _ = menu.config.save();
+                menu.refresh_current_slices();
+                menu.hovered_index = adding.target_index as i32;
+                menu.anim.hover_factor = 1.0;
+                menu.anim.drag_pluck_progress = 0.0;
+                menu.anim.drag_indicator_alpha = 0.0;
+                menu.anim.drag_elapsed = 0.0;
+                self.click_handled_on_press = true;
+                return None;
+            }
+
             // Sub-ring FileJump target pressed -> start potential sub-ring drag-to-reorder.
             // Do NOT execute click on press! Defer to ButtonState::Released so user can drag.
             if menu.active_sub_tier == Some(SubTierType::FileJump)
@@ -534,6 +565,9 @@ impl SeatHandler {
         if state == KeyState::Released && is_super_or_tab(keysym) {
             if menu.flick_mode_armed && menu.cursor_moved_flick {
                 menu.flick_mode_armed = false;
+                if menu.adding_slice.is_some() {
+                    return None;
+                }
                 if menu.outer_hovered_index >= 0
                     && (menu.outer_hovered_index as usize) < menu.sub_slices.len()
                 {
@@ -572,6 +606,9 @@ impl SeatHandler {
         // 3. Number keys 1..9
         if let Some(n) = parse_number_key(keysym) {
             if state == KeyState::Pressed {
+                if menu.adding_slice.is_some() {
+                    return None;
+                }
                 return menu.handle_number_key(n);
             }
             return None;
@@ -1212,6 +1249,93 @@ mod tests {
             },
         );
         assert_eq!(act, Some(ActionId::Terminal));
+    }
+
+    #[test]
+    fn test_adding_slice_pointer_tracking_and_drop_click() {
+        let mut seat = SeatHandler::new();
+        let mut menu = MenuState::new(RadialConfig::default(), false);
+        menu.center_x = 200.0;
+        menu.center_y = 200.0;
+        menu.phase = MenuPhase::Open;
+        menu.current_slices = vec![
+            make_slice("slice0", "Slice 0", 0),
+            make_slice("slice1", "Slice 1", 1),
+            make_slice("slice2", "Slice 2", 2),
+            make_slice("slice3", "Slice 3", 3),
+        ];
+
+        // Activate adding slice
+        menu.adding_slice = Some(crate::state::menu::AddingSliceState {
+            action_id: "firefox".to_string(),
+            icon: "globe".to_string(),
+            label: "Firefox".to_string(),
+            target_index: 0,
+            current_x: 200.0,
+            current_y: 200.0,
+        });
+
+        // 1. Pointer motion to 3 o'clock (x=300, y=200) -> 90 clock degrees
+        // slice_angle = 360 / 4 = 90 deg.
+        // clock_shifted = (90 + 45) = 135 deg -> floor(135/90) = 1
+        seat.handle_pointer_motion(&mut menu, 300.0, 200.0);
+        let adding = menu.adding_slice.as_ref().unwrap();
+        assert_eq!(adding.current_x, 300.0);
+        assert_eq!(adding.current_y, 200.0);
+        assert_eq!(adding.target_index, 1);
+        assert_eq!(menu.hovered_index, -1);
+        assert_eq!(menu.center_hovered, false);
+
+        // 2. Left click drops the slice!
+        let press_act = seat.handle_pointer_button(&mut menu, BTN_LEFT, ButtonState::Pressed);
+        assert_eq!(press_act, None);
+        assert!(menu.adding_slice.is_none(), "adding_slice must be consumed on drop");
+        assert_eq!(menu.hovered_index, 1);
+        assert_eq!(menu.anim.hover_factor, 1.0);
+        assert_eq!(menu.anim.drag_pluck_progress, 0.0);
+
+        // Verify it was inserted at index 1 in config
+        let slices = menu.config.get_active_slice_ids(&menu.context.to_string());
+        assert!(slices.contains(&"firefox".to_string()));
+        assert_eq!(slices[1], "firefox");
+
+        // 3. Mouse release consumes click without executing
+        let release_act = seat.handle_pointer_button(&mut menu, BTN_LEFT, ButtonState::Released);
+        assert_eq!(release_act, None);
+        assert!(!matches!(menu.phase, MenuPhase::ClosingAnimated { .. }));
+    }
+
+    #[test]
+    fn test_adding_slice_blocks_number_and_flick_keys() {
+        let mut seat = SeatHandler::new();
+        let mut menu = MenuState::new(RadialConfig::default(), false);
+        menu.center_x = 200.0;
+        menu.center_y = 200.0;
+        menu.phase = MenuPhase::Open;
+        menu.current_slices = vec![
+            make_slice("slice0", "Slice 0", 0),
+            make_slice("slice1", "Slice 1", 1),
+        ];
+
+        menu.adding_slice = Some(crate::state::menu::AddingSliceState {
+            action_id: "firefox".to_string(),
+            icon: "globe".to_string(),
+            label: "Firefox".to_string(),
+            target_index: 0,
+            current_x: 200.0,
+            current_y: 200.0,
+        });
+
+        // Pressing number key '1' while adding does not execute
+        let key_act = seat.handle_key_event(&mut menu, 0x31, KeyState::Pressed);
+        assert_eq!(key_act, None);
+
+        // Releasing super/tab in flick mode while adding does not execute
+        menu.flick_mode_armed = true;
+        menu.cursor_moved_flick = true;
+        menu.hovered_index = 0;
+        let flick_act = seat.handle_key_event(&mut menu, 0xffeb, KeyState::Released);
+        assert_eq!(flick_act, None);
     }
 }
 

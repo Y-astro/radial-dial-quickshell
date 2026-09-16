@@ -537,6 +537,28 @@ impl App {
         }
 
         // Neither modal is open:
+        // Check if currently adding a slice: left-click drops it, right-click cancels adding
+        if self.menu.adding_slice.is_some() {
+            if is_left_button(button) {
+                if let Some(action) = self.seat_handler.handle_pointer_button(
+                    &mut self.menu,
+                    button,
+                    ButtonState::Pressed,
+                ) {
+                    self.menu.transition_close_animated(Some(action));
+                }
+                self.dirty = true;
+                return;
+            } else if is_right_button(button) {
+                self.menu.adding_slice = None;
+                self.menu.anim.drag_pluck_progress = 0.0;
+                self.menu.anim.drag_indicator_alpha = 0.0;
+                self.menu.anim.drag_elapsed = 0.0;
+                self.dirty = true;
+                return;
+            }
+        }
+
         // Check if outer sub-ring slice is clicked (e.g. FileJump target or + Add)
         if self.menu.active_sub_tier == Some(SubTierType::FileJump) && self.menu.outer_hovered_index >= 0 {
             let sub_idx = self.menu.outer_hovered_index as usize;
@@ -829,10 +851,38 @@ impl App {
                                         return;
                                     }
                                 } else {
-                                    // Inactive: open SelectPosition mode so user can choose insertion position or replacement
-                                    if let Some(c) = &mut self.customizer {
-                                        c.open_select_position(item_id, false);
-                                    }
+                                    // Inactive: clicked "+ Add".
+                                    // Initiate interactive AddingSlice mode stuck to cursor around the main dial
+                                    let catalogue = state::actions::function_catalogue();
+                                    let def = catalogue.iter().find(|d| d.id == item_id);
+                                    let icon = def.map(|d| d.icon.to_string()).unwrap_or_else(|| "add".to_string());
+                                    let label = def.map(|d| d.label.to_string()).unwrap_or_else(|| item_id.to_string());
+
+                                    let cx = self.menu.center_x;
+                                    let cy = self.menu.center_y;
+                                    let slice_count = self.menu.current_slices.len().max(1);
+                                    let slice_angle = 360.0 / slice_count as f32;
+                                    let dx = x - cx;
+                                    let dy = y - cy;
+                                    let raw_angle = dy.atan2(dx).to_degrees();
+                                    let clock_angle = (raw_angle + 90.0).rem_euclid(360.0);
+                                    let clock_shifted = (clock_angle + slice_angle * 0.5).rem_euclid(360.0);
+                                    let target_index = ((clock_shifted / slice_angle).floor() as usize) % slice_count;
+
+                                    self.customizer = None;
+                                    self.seat_handler.customizer_open = false;
+                                    self.menu.flick_mode_armed = false;
+                                    self.menu.adding_slice = Some(state::menu::AddingSliceState {
+                                        action_id: item_id.to_string(),
+                                        icon,
+                                        label,
+                                        target_index,
+                                        current_x: x,
+                                        current_y: y,
+                                    });
+                                    self.menu.anim.drag_elapsed = 0.0;
+                                    self.menu.anim.drag_pluck_progress = 0.0;
+                                    self.menu.anim.drag_indicator_alpha = 0.0;
                                     self.dirty = true;
                                     return;
                                 }
@@ -1598,6 +1648,7 @@ impl App {
 
         let is_main_drag = self.menu.drag.is_dragging && !self.menu.drag.is_sub_drag;
         let is_sub_drag = self.menu.drag.is_dragging && self.menu.drag.is_sub_drag;
+        let is_adding = self.menu.adding_slice.is_some();
 
         let drag_boundary = if is_main_drag
             && self.menu.drag.from_index >= 0
@@ -1610,16 +1661,18 @@ impl App {
                 self.menu.drag.target_index
             } as usize;
             Some(b % slice_count)
+        } else if let Some(adding) = &self.menu.adding_slice {
+            Some(adding.target_index % slice_count)
         } else {
             None
         };
 
-        let hovered = if is_main_drag {
+        let hovered = if is_main_drag || is_adding {
             -1
         } else {
             self.menu.hovered_index
         };
-        let hover_factor = if is_main_drag {
+        let hover_factor = if is_main_drag || is_adding {
             0.0
         } else {
             self.menu.anim.hover_factor
@@ -1859,7 +1912,7 @@ impl App {
                 }
             }
 
-            // Draw the plucked floating wedge above the main ring tracking cursor
+            // Draw the plucked floating wedge above the main ring tracking cursor (drag reorder)
             if is_main_drag && self.menu.drag.from_index >= 0 && (self.menu.drag.from_index as usize) < self.menu.current_slices.len() && self.menu.anim.drag_pluck_progress > 0.01 {
                 let from_slice = &self.menu.current_slices[self.menu.drag.from_index as usize];
                 let dx = self.menu.drag.current_x - cx;
@@ -1887,6 +1940,37 @@ impl App {
                     on_primary_col,
                     global_xform,
                 );
+            }
+
+            // Draw the plucked floating wedge above the main ring tracking cursor (adding slice)
+            if let Some(adding) = &self.menu.adding_slice {
+                if self.menu.anim.drag_pluck_progress > 0.01 {
+                    let dx = adding.current_x - cx;
+                    let dy = adding.current_y - cy;
+                    let pointer_angle_deg = dy.atan2(dx).to_degrees();
+                    let badge_num = if adding.target_index < 9 {
+                        Some(adding.target_index + 1)
+                    } else {
+                        None
+                    };
+                    draw_plucked_floating_wedge(
+                        &mut self.font_renderer,
+                        pixmap,
+                        cx,
+                        cy,
+                        SLICE_INNER_R,
+                        SLICE_OUTER_R,
+                        slice_angle,
+                        pointer_angle_deg,
+                        CORNER_RADIUS_MAIN,
+                        &adding.icon,
+                        badge_num,
+                        self.menu.anim.drag_pluck_progress,
+                        primary_col,
+                        on_primary_col,
+                        global_xform,
+                    );
+                }
             }
 
             // 3. Draw Sub-Ring if active OR if it's still animating closed
@@ -2082,8 +2166,8 @@ impl App {
                 }
             }
             MenuPhase::Open => {
-                // Drag-reorder animations: segment pluck spring and neon insertion line fade
-                if self.menu.drag.is_dragging {
+                // Drag-reorder and adding-slice animations: segment pluck spring and neon insertion line fade
+                if self.menu.drag.is_dragging || self.menu.adding_slice.is_some() {
                     self.menu.anim.drag_elapsed += dt;
                     let pluck_dur = if self.menu.is_low_end_gpu { 60.0 } else { 120.0 };
                     let t_pluck = (self.menu.anim.drag_elapsed / pluck_dur).clamp(0.0, 1.0);

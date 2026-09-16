@@ -29,6 +29,16 @@ pub struct BrowserTab {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct AddingSliceState {
+    pub action_id: String,
+    pub icon: String,
+    pub label: String,
+    pub target_index: usize,
+    pub current_x: f32,
+    pub current_y: f32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct MenuState {
     pub phase: MenuPhase,
     pub center_x: f32,
@@ -51,6 +61,7 @@ pub struct MenuState {
     pub parent_slice_index: i32,
     pub sub_slices: Vec<SliceItem>,
     pub drag: DragState,
+    pub adding_slice: Option<AddingSliceState>,
     pub flick_mode_armed: bool,
     pub cursor_moved_flick: bool,
     pub flick_open_time: std::time::Instant,
@@ -125,6 +136,7 @@ impl MenuState {
             parent_slice_index: -1,
             sub_slices: Vec::new(),
             drag: DragState::default(),
+            adding_slice: None,
             flick_mode_armed: false,
             cursor_moved_flick: false,
             flick_open_time: std::time::Instant::now(),
@@ -231,6 +243,7 @@ impl MenuState {
         self.parent_slice_index = -1;
         self.sub_slices.clear();
         self.drag.reset();
+        self.adding_slice = None;
 
         self.anim = AnimState::default();
         self.anim.overall_scale = 1.0;
@@ -243,6 +256,7 @@ impl MenuState {
             pending_action: action,
         };
         self.flick_mode_armed = false;
+        self.adding_slice = None;
     }
 
     /// Immediately close menu without animations
@@ -256,6 +270,7 @@ impl MenuState {
         self.center_hovered = false;
         self.outer_hovered_index = -1;
         self.drag.reset();
+        self.adding_slice = None;
         self.is_special_workspace = false;
     }
 
@@ -327,8 +342,15 @@ impl MenuState {
         }
     }
 
-    /// Handles Escape key: closes sub-tier if open (returns false), or closes menu (returns true)
+    /// Handles Escape key: closes sub-tier if open (returns false), cancels adding slice (returns false), or closes menu (returns true)
     pub fn handle_escape(&mut self) -> bool {
+        if self.adding_slice.is_some() {
+            self.adding_slice = None;
+            self.anim.drag_pluck_progress = 0.0;
+            self.anim.drag_indicator_alpha = 0.0;
+            self.anim.drag_elapsed = 0.0;
+            return false;
+        }
         if self.drag.is_dragging {
             self.drag.reset();
             return false;
@@ -385,6 +407,12 @@ impl MenuState {
 
     /// Dynamic active hover content (icon, label) for center hub text/icon
     pub fn active_hover_hub_content(&self) -> (Option<String>, String) {
+        // 0. Adding slice
+        if let Some(adding) = &self.adding_slice {
+            let slot = adding.target_index + 1;
+            return (Some(adding.icon.clone()), format!("Add {} → Slot {}", adding.label, slot));
+        }
+
         // 1. Dragging slice
         if self.drag.is_dragging && self.drag.from_index >= 0 && self.drag.target_index >= 0 {
             if self.drag.is_sub_drag {
@@ -1009,5 +1037,40 @@ mod tests {
         assert_eq!(subs[1].icon, "terminal");
         assert_eq!(subs[2].label, "WS X");
         assert_eq!(subs[2].icon, "globe");
+    }
+
+    #[test]
+    fn test_adding_slice_escape_and_hub_content() {
+        let mut menu = MenuState::new(RadialConfig::default(), false);
+        assert!(menu.adding_slice.is_none());
+
+        menu.adding_slice = Some(AddingSliceState {
+            action_id: "kitty".to_string(),
+            icon: "terminal".to_string(),
+            label: "Kitty".to_string(),
+            target_index: 2,
+            current_x: 200.0,
+            current_y: 200.0,
+        });
+        menu.anim.drag_pluck_progress = 1.0;
+        menu.anim.drag_indicator_alpha = 1.0;
+        menu.anim.drag_elapsed = 120.0;
+
+        // Hub content displays adding action info
+        let (icon, label) = menu.active_hover_hub_content();
+        assert_eq!(icon, Some("terminal".to_string()));
+        assert_eq!(label, "Add Kitty → Slot 3");
+
+        // First escape cancels adding_slice and returns false (keeps main dial open)
+        let closed = menu.handle_escape();
+        assert!(!closed, "handle_escape must return false when canceling adding_slice");
+        assert!(menu.adding_slice.is_none());
+        assert_eq!(menu.anim.drag_pluck_progress, 0.0);
+        assert_eq!(menu.anim.drag_indicator_alpha, 0.0);
+        assert_eq!(menu.anim.drag_elapsed, 0.0);
+
+        // Second escape closes menu
+        let closed_second = menu.handle_escape();
+        assert!(closed_second, "Second handle_escape closes the menu");
     }
 }

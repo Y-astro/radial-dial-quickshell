@@ -612,9 +612,9 @@ impl MenuState {
                         .collect()
                 } else {
                     let win_title = if !self.active_window_title.is_empty() {
-                        self.active_window_title.clone()
+                        crate::ipc::tabs_shm::clean_browser_window_title(&self.active_window_title)
                     } else if !self.window_info.title.is_empty() {
-                        self.window_info.title.clone()
+                        crate::ipc::tabs_shm::clean_browser_window_title(&self.window_info.title)
                     } else {
                         "Tab 1".to_string()
                     };

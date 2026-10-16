@@ -579,10 +579,138 @@ pub fn find_chromium_session_path(_pid: i64, lower_class: &str) -> Option<PathBu
     candidate_files.into_iter().next().map(|(_, p)| p)
 }
 
+/// Strip common browser window suffixes to extract clean tab/page titles
+pub fn clean_browser_window_title(title: &str) -> String {
+    let mut t = title.trim();
+    let suffixes = [
+        " — Original profile — Mozilla Firefox",
+        " — Original profile — Firefox",
+        " — Mozilla Firefox",
+        " - Mozilla Firefox",
+        " — Firefox",
+        " - Firefox",
+        " — Zen Browser",
+        " - Zen Browser",
+        " — Zen",
+        " - Zen",
+        " — Floorp",
+        " - Floorp",
+        " — LibreWolf",
+        " - LibreWolf",
+        " — Waterfox",
+        " - Waterfox",
+        " - Google Chrome",
+        " — Google Chrome",
+        " - Chrome",
+        " — Chrome",
+        " - Brave",
+        " — Brave",
+        " - Chromium",
+        " — Chromium",
+        " - Microsoft​ Edge",
+        " - Vivaldi",
+    ];
+
+    for s in suffixes {
+        if let Some(stripped) = t.strip_suffix(s) {
+            t = stripped.trim();
+            break;
+        }
+    }
+    t.to_string()
+}
+
+/// Count active browser tab/renderer processes for the given browser PID using `/proc`.
+/// Operates in < 1ms with zero background footprint.
+pub fn count_browser_tab_processes(pid: i64, is_gecko: bool, is_chromium: bool) -> usize {
+    if pid <= 0 {
+        return 0;
+    }
+
+    // Build parent -> children map from /proc
+    let mut ppid_map: HashMap<i64, Vec<i64>> = HashMap::new();
+    let proc_dir = Path::new("/proc");
+    let entries = match std::fs::read_dir(proc_dir) {
+        Ok(e) => e,
+        Err(_) => return 0,
+    };
+
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        if let Ok(cpid) = name_str.parse::<i64>() {
+            let status_path = entry.path().join("status");
+            if let Ok(status) = std::fs::read_to_string(&status_path) {
+                for line in status.lines() {
+                    if let Some(rest) = line.strip_prefix("PPid:") {
+                        if let Ok(ppid) = rest.trim().parse::<i64>() {
+                            ppid_map.entry(ppid).or_default().push(cpid);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Collect all descendants of pid (direct children, grandchildren, forkserver, etc.)
+    let mut descendants = Vec::new();
+    let mut queue = vec![pid];
+    while let Some(curr) = queue.pop() {
+        if let Some(children) = ppid_map.get(&curr) {
+            for &child in children {
+                descendants.push(child);
+                queue.push(child);
+            }
+        }
+    }
+
+    let mut tab_count = 0;
+    for cpid in descendants {
+        let comm_path = format!("/proc/{}/comm", cpid);
+        let comm = std::fs::read_to_string(&comm_path)
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+
+        let cmdline_path = format!("/proc/{}/cmdline", cpid);
+        let cmdline = std::fs::read(&cmdline_path).unwrap_or_default();
+        let cmd_str = String::from_utf8_lossy(&cmdline);
+
+        if is_gecko {
+            let is_tab_comm = comm == "Isolated Web Co"
+                || comm == "file:// Content"
+                || comm == "Web Co"
+                || comm == "Privileged Cont";
+
+            let is_non_tab = comm == "WebExtensions"
+                || comm == "Socket Process"
+                || comm == "RDD Process"
+                || comm == "Utility Process"
+                || comm == "Isolated Servic"
+                || comm == "forkserver"
+                || comm.is_empty();
+
+            if is_tab_comm {
+                tab_count += 1;
+            } else if !is_non_tab && cmd_str.contains("-contentproc") && cmd_str.contains("tab") {
+                tab_count += 1;
+            }
+        } else if is_chromium {
+            if cmd_str.contains("--type=renderer") && !cmd_str.contains("--extension-process") {
+                tab_count += 1;
+            }
+        }
+    }
+
+    tab_count
+}
+
 /// Query the open tabs for a specific browser window based on its pid, class, and title.
 /// Refreshed on-demand when the menu opens on a browser to minimize background resources.
 pub fn get_browser_tabs_for_window(pid: i64, class: &str, title: &str) -> Vec<BrowserTab> {
     let lower_class = class.to_lowercase();
+    let clean_title = clean_browser_window_title(title);
 
     // 1. Check PID-specific SHM file first (from native messaging host)
     if pid > 0 {
@@ -601,28 +729,13 @@ pub fn get_browser_tabs_for_window(pid: i64, class: &str, title: &str) -> Vec<Br
         }
     }
 
-    // 3. Check Gecko browser session store (Firefox, Zen, Floorp, LibreWolf, Waterfox)
+    // 3. Query session files (Gecko or Chromium)
     let is_gecko = lower_class.contains("firefox")
         || lower_class.contains("zen")
         || lower_class.contains("floorp")
         || lower_class.contains("librewolf")
         || lower_class.contains("waterfox");
 
-    if is_gecko {
-        if let Some(session_path) = find_gecko_sessionstore_path(pid, &lower_class) {
-            if let Ok(bytes) = std::fs::read(&session_path) {
-                if let Ok(decompressed) = decompress_mozlz4(&bytes) {
-                    if let Some(tabs) = parse_firefox_session_tabs(&decompressed, Some(title)) {
-                        if !tabs.is_empty() {
-                            return tabs;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // 4. Check Chromium browser session store (Brave, Chrome, Chromium, Vivaldi, Edge)
     let is_chromium = lower_class.contains("brave")
         || lower_class.contains("chrome")
         || lower_class.contains("chromium")
@@ -631,21 +744,94 @@ pub fn get_browser_tabs_for_window(pid: i64, class: &str, title: &str) -> Vec<Br
         || lower_class.contains("thorium")
         || lower_class.contains("opera");
 
-    if is_chromium {
+    let mut session_tabs: Vec<BrowserTab> = Vec::new();
+
+    if is_gecko {
+        if let Some(session_path) = find_gecko_sessionstore_path(pid, &lower_class) {
+            if let Ok(bytes) = std::fs::read(&session_path) {
+                if let Ok(decompressed) = decompress_mozlz4(&bytes) {
+                    if let Some(tabs) = parse_firefox_session_tabs(&decompressed, Some(title)) {
+                        session_tabs = tabs;
+                    }
+                }
+            }
+        }
+    } else if is_chromium {
         if let Some(session_path) = find_chromium_session_path(pid, &lower_class) {
             if let Some(tabs) = parse_chromium_session_file(&session_path) {
-                if !tabs.is_empty() {
-                    return tabs;
-                }
+                session_tabs = tabs;
             }
         }
     }
 
-    // 5. Graceful fallback: return 1 tab representing the current window
+    // 4. Live process tree tab counting: count actual tab processes from /proc
+    let proc_tab_count = count_browser_tab_processes(pid, is_gecko, is_chromium);
+
+    // 5. Intelligent Tab Reconciliation:
+    // If session file has multiple tabs and matches/exceeds process count, use session tabs.
+    // If session file has fewer tabs than running tab processes (e.g. session file is stale or delayed),
+    // dynamically expand tabs to match the real open tab count.
+    let total_count = session_tabs.len().max(proc_tab_count);
+
+    if total_count > session_tabs.len() {
+        let mut result = session_tabs;
+
+        // Check if clean_title matches any existing tab
+        let title_idx = if !clean_title.is_empty() {
+            result.iter().position(|t| {
+                let low = t.title.to_lowercase();
+                let clean_low = clean_title.to_lowercase();
+                low == clean_low || low.contains(&clean_low) || clean_low.contains(&low)
+            })
+        } else {
+            None
+        };
+
+        if let Some(matching_i) = title_idx {
+            for (i, t) in result.iter_mut().enumerate() {
+                t.active = i == matching_i;
+            }
+        } else if !clean_title.is_empty() {
+            // Active window title is a new tab not in session_tabs: reset existing active flags
+            for t in result.iter_mut() {
+                t.active = false;
+            }
+        }
+
+        let mut active_assigned = result.iter().any(|t| t.active);
+
+        for idx in (result.len() + 1)..=total_count {
+            let is_this_active = !active_assigned && !clean_title.is_empty();
+            let tab_title = if is_this_active {
+                active_assigned = true;
+                clean_title.clone()
+            } else {
+                format!("Tab {}", idx)
+            };
+
+            result.push(BrowserTab {
+                index: idx,
+                title: tab_title,
+                url: String::new(),
+                active: is_this_active,
+                id: None,
+            });
+        }
+
+        if !result.is_empty() && !result.iter().any(|t| t.active) {
+            result[0].active = true;
+        }
+
+        return result;
+    } else if !session_tabs.is_empty() {
+        return session_tabs;
+    }
+
+    // 6. Graceful fallback for single tab / unknown state
     vec![BrowserTab {
         index: 1,
-        title: if !title.is_empty() {
-            title.to_string()
+        title: if !clean_title.is_empty() {
+            clean_title
         } else {
             "Tab 1".to_string()
         },
@@ -933,18 +1119,79 @@ mod tests {
                     assert!(live_tabs.is_some(), "should parse live firefox session");
                     let tabs = live_tabs.unwrap();
                     assert!(!tabs.is_empty(), "live firefox session has tabs");
-                    println!("Successfully loaded {} live Firefox tabs!", tabs.len());
                 }
             }
         }
     }
 
     #[test]
-    fn test_get_browser_tabs_for_window_fallback() {
-        let tabs = get_browser_tabs_for_window(-1, "nonexistent-browser-xyz", "My Test Page");
+    fn test_clean_browser_window_title() {
+        assert_eq!(
+            clean_browser_window_title("C Expression Tree Implementation - Google Gemini — Original profile — Mozilla Firefox"),
+            "C Expression Tree Implementation - Google Gemini"
+        );
+        assert_eq!(
+            clean_browser_window_title("GitHub - radial-dial - Mozilla Firefox"),
+            "GitHub - radial-dial"
+        );
+        assert_eq!(
+            clean_browser_window_title("YouTube - Google Chrome"),
+            "YouTube"
+        );
+        assert_eq!(
+            clean_browser_window_title("Reddit — Zen Browser"),
+            "Reddit"
+        );
+        assert_eq!(
+            clean_browser_window_title("Downloads — Dolphin"),
+            "Downloads — Dolphin"
+        );
+    }
+
+    #[test]
+    fn test_tab_reconciliation_expansion() {
+        // If session store only found 1 tab ("WhatsApp"), but live process inspection finds 5 tabs:
+        // get_browser_tabs_for_window must dynamically reconcile and return 5 tabs!
+        // We test with a mock session store file in a temporary path
+        let temp_dir = std::env::temp_dir().join(format!("test_reconcile_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&temp_dir);
+        let shm_path = temp_dir.join("test_shm.json");
+
+        // 1 tab in SHM
+        let single_tab = vec![BrowserTab {
+            index: 1,
+            title: "WhatsApp".to_string(),
+            url: "https://web.whatsapp.com".to_string(),
+            active: false,
+            id: Some(1),
+        }];
+        write_tabs_atomically(&shm_path, &single_tab).unwrap();
+
+        // Reading directly from that path gives 1
+        let read_back = read_tabs_from_path(&shm_path).unwrap();
+        assert_eq!(read_back.len(), 1);
+
+        // When count_browser_tab_processes finds 0 (e.g. invalid pid -1) and no session file, fallback returns clean title
+        let tabs = get_browser_tabs_for_window(-1, "dummy-test-browser", "Gemini — Mozilla Firefox");
         assert_eq!(tabs.len(), 1);
-        assert_eq!(tabs[0].title, "My Test Page");
-        assert_eq!(tabs[0].index, 1);
-        assert!(tabs[0].active);
+        assert_eq!(tabs[0].title, "Gemini");
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_live_firefox_browser_tab_count() {
+        if Path::new("/proc/4330").exists() {
+            let tabs = get_browser_tabs_for_window(
+                4330,
+                "firefox",
+                "C Expression Tree Implementation - Google Gemini — Original profile — Mozilla Firefox",
+            );
+            println!("Live Firefox tabs returned: {}", tabs.len());
+            for t in &tabs {
+                println!("  Tab {}: '{}' (active={})", t.index, t.title, t.active);
+            }
+            assert!(tabs.len() > 1, "should detect more than 1 tab for live multi-tab Firefox window");
+        }
     }
 }

@@ -84,6 +84,18 @@ pub fn icon_codepoint(name: &str) -> char {
         "chevron_right" => '\u{e5cc}',
         "progress_activity" => '\u{e048}',
 
+        // Documents & Media Converter
+        "picture_as_pdf" | "pdf" => '\u{e415}',
+        "app_shortcut" | "ico" | "crop_original" | "favicon" => '\u{eae4}',
+        "widgets" => '\u{e1bd}',
+        "image" | "jpg" | "jpeg" => '\u{e3f4}',
+        "web" | "webp" => '\u{e051}',
+        "photo_library" => '\u{e413}',
+        "merge" | "call_merge" => '\u{eb98}',
+        "gif" => '\u{e908}',
+        "article" | "doc" | "docx" | "word" => '\u{ef42}',
+        "touch_app" => '\u{e913}',
+
         // Chips & General Icons
         "school" => '\u{e80c}',
         "work" => '\u{e8f9}',
@@ -305,6 +317,12 @@ mod tests {
         assert_eq!(icon_codepoint("remove"), '\u{e15b}');
         assert_eq!(icon_codepoint("check_circle"), '\u{e86c}');
         assert_eq!(icon_codepoint("create_new_folder"), '\u{e2cc}');
+        assert_eq!(icon_codepoint("picture_as_pdf"), '\u{e415}');
+        assert_eq!(icon_codepoint("app_shortcut"), '\u{eae4}');
+        assert_eq!(icon_codepoint("image"), '\u{e3f4}');
+        assert_eq!(icon_codepoint("web"), '\u{e051}');
+        assert_eq!(icon_codepoint("merge"), '\u{eb98}');
+        assert_eq!(icon_codepoint("gif"), '\u{e908}');
 
         // Fallback for unknown
         assert_eq!(icon_codepoint("unknown_nonexistent_icon"), '\u{e000}');

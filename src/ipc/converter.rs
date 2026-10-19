@@ -266,7 +266,7 @@ pub fn generate_converter_sub_slices(selected_files: &[String]) -> Vec<SliceItem
 
         match category {
             FileCategory::Document => {
-                // Single PPT or Word doc -> Convert to PDF
+                // Single PPT or Word doc -> Convert to PDF or Text
                 vec![
                     create_convert_slice(
                         "convert_single_pdf",
@@ -286,15 +286,6 @@ pub fn generate_converter_sub_slices(selected_files: &[String]) -> Vec<SliceItem
                         "txt",
                         false,
                     ),
-                    create_convert_slice(
-                        "convert_single_docx",
-                        "To Word (.docx)",
-                        "article",
-                        2,
-                        selected_files,
-                        "docx",
-                        false,
-                    ),
                 ]
             }
             FileCategory::Image => {
@@ -306,7 +297,7 @@ pub fn generate_converter_sub_slices(selected_files: &[String]) -> Vec<SliceItem
                 slices.push(create_convert_slice(
                     "convert_single_ico",
                     "To .ico",
-                    "crop_original",
+                    "app_shortcut",
                     idx,
                     selected_files,
                     "ico",
@@ -492,7 +483,7 @@ pub fn generate_converter_sub_slices(selected_files: &[String]) -> Vec<SliceItem
             slices.push(create_convert_slice(
                 "convert_each_ico",
                 "Each to .ico",
-                "crop_original",
+                "app_shortcut",
                 idx,
                 selected_files,
                 "ico",
@@ -970,9 +961,11 @@ mod tests {
     fn test_generate_converter_sub_slices_single_document() {
         let files = vec!["/home/astro/Downloads/slides.pptx".to_string()];
         let slices = generate_converter_sub_slices(&files);
-        assert_eq!(slices.len(), 3);
+        assert_eq!(slices.len(), 2);
         assert_eq!(slices[0].label, "Convert to PDF");
         assert_eq!(slices[0].icon, "picture_as_pdf");
+        assert_eq!(slices[1].label, "To Text (.txt)");
+        assert_eq!(slices[1].icon, "description");
         if let Some(ActionId::ConvertFile { files: f, target_format, merge }) = &slices[0].action {
             assert_eq!(f, &files);
             assert_eq!(target_format, "pdf");

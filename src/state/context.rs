@@ -7,6 +7,7 @@ pub enum Context {
     Browser,
     Code,
     Media,
+    FileManager,
 }
 
 impl std::fmt::Display for Context {
@@ -17,6 +18,7 @@ impl std::fmt::Display for Context {
             Context::Browser => write!(f, "browser"),
             Context::Code => write!(f, "code"),
             Context::Media => write!(f, "media"),
+            Context::FileManager => write!(f, "filemanager"),
         }
     }
 }
@@ -67,6 +69,15 @@ pub fn resolve_context(window_class: &str, title: &str) -> Context {
     // Media: /mpv|spotify|vlc/
     if ["mpv", "spotify", "vlc"].iter().any(|p| c.contains(p)) {
         return Context::Media;
+    }
+
+    // File Manager: dolphin, nautilus, thunar, nemo, pcmanfm, caja, krusader, doublecmd
+    let filemanager_patterns = [
+        "dolphin", "nautilus", "thunar", "nemo", "pcmanfm", "caja",
+        "io.elementary.files", "krusader", "doublecmd", "spacefm",
+    ];
+    if filemanager_patterns.iter().any(|p| c.contains(p)) {
+        return Context::FileManager;
     }
 
     Context::Default
@@ -136,11 +147,21 @@ mod tests {
     }
 
     #[test]
+    fn test_resolve_context_filemanager() {
+        assert_eq!(resolve_context("org.kde.dolphin", "Downloads — Dolphin"), Context::FileManager);
+        assert_eq!(resolve_context("dolphin", ""), Context::FileManager);
+        assert_eq!(resolve_context("org.gnome.Nautilus", ""), Context::FileManager);
+        assert_eq!(resolve_context("thunar", ""), Context::FileManager);
+        assert_eq!(resolve_context("nemo", ""), Context::FileManager);
+    }
+
+    #[test]
     fn test_context_display() {
         assert_eq!(Context::Default.to_string(), "default");
         assert_eq!(Context::Terminal.to_string(), "kitty");
         assert_eq!(Context::Browser.to_string(), "browser");
         assert_eq!(Context::Code.to_string(), "code");
         assert_eq!(Context::Media.to_string(), "media");
+        assert_eq!(Context::FileManager.to_string(), "filemanager");
     }
 }

@@ -53,6 +53,7 @@ pub struct MenuState {
     pub active_window_title: String,
     pub current_slices: Vec<SliceItem>,
     pub browser_tabs: Vec<BrowserTab>,
+    pub selected_files: Vec<String>,
     pub active_clients: Vec<HyprClient>,
     pub hovered_index: i32,
     pub center_hovered: bool,
@@ -128,6 +129,7 @@ impl MenuState {
             active_window_title: String::new(),
             current_slices: Vec::new(),
             browser_tabs: Vec::new(),
+            selected_files: Vec::new(),
             active_clients: Vec::new(),
             hovered_index: -1,
             center_hovered: false,
@@ -243,6 +245,12 @@ impl MenuState {
             self.browser_tabs.clear();
         }
 
+        if self.context == Context::FileManager {
+            self.refresh_file_manager_selection();
+        } else {
+            self.selected_files.clear();
+        }
+
         self.phase = MenuPhase::Opening;
         self.flick_mode_armed = true;
         self.flick_open_time = std::time::Instant::now();
@@ -290,6 +298,9 @@ impl MenuState {
     pub fn open_sub_tier(&mut self, parent_index: i32, tier: SubTierType) {
         if tier == SubTierType::BrowserTabs && self.context == Context::Browser {
             self.refresh_browser_tabs();
+        }
+        if tier == SubTierType::FileConverter && self.selected_files.is_empty() {
+            self.refresh_file_manager_selection();
         }
         self.active_sub_tier = Some(tier);
         self.parent_slice_index = parent_index;
@@ -375,11 +386,35 @@ impl MenuState {
         );
     }
 
+    /// Refresh selected files on-demand from the file manager
+    pub fn refresh_file_manager_selection(&mut self) {
+        let win_pid = if self.active_window_pid > 0 {
+            self.active_window_pid
+        } else {
+            self.window_info.pid
+        };
+        let win_title = if !self.active_window_title.is_empty() {
+            &self.active_window_title
+        } else {
+            &self.window_info.title
+        };
+        self.selected_files = crate::ipc::converter::get_selected_files_sync(win_pid, win_title);
+        log::info!(
+            "Refreshed file manager selection (class={}, pid={}): found {} selected files",
+            self.window_info.class,
+            win_pid,
+            self.selected_files.len()
+        );
+    }
+
     /// Re-generates sub slices for the active sub tier if open
     pub fn refresh_sub_slices(&mut self) {
         if let Some(tier) = self.active_sub_tier {
             if tier == SubTierType::BrowserTabs && self.context == Context::Browser {
                 self.refresh_browser_tabs();
+            }
+            if tier == SubTierType::FileConverter && self.selected_files.is_empty() {
+                self.refresh_file_manager_selection();
             }
             self.sub_slices = self.generate_sub_slices(tier);
         }
@@ -489,7 +524,9 @@ impl MenuState {
         // 2. Outer sub-ring hovered
         if self.outer_hovered_index >= 0 {
             if let Some(sub) = self.sub_slices.get(self.outer_hovered_index as usize) {
-                if self.active_sub_tier == Some(SubTierType::ActiveApps) {
+                if self.active_sub_tier == Some(SubTierType::ActiveApps)
+                    || self.active_sub_tier == Some(SubTierType::FileConverter)
+                {
                     return (Some(sub.icon.clone()), sub.label.clone());
                 } else {
                     return (None, sub.label.clone());
@@ -730,6 +767,10 @@ impl MenuState {
                     "volume_off",
                     0,
                 )]
+            }
+
+            SubTierType::FileConverter => {
+                crate::ipc::converter::generate_converter_sub_slices(&self.selected_files)
             }
         }
     }
@@ -1194,5 +1235,57 @@ mod tests {
         // Second escape closes menu
         let closed_second = menu.handle_escape();
         assert!(closed_second, "Second handle_escape closes the menu");
+    }
+
+    #[test]
+    fn test_filemanager_context_menu() {
+        let mut menu = MenuState::new(RadialConfig::default(), false);
+        let ctx = make_test_context("org.kde.dolphin", "Downloads — Dolphin");
+        menu.transition_open(ctx);
+        assert_eq!(menu.context, Context::FileManager);
+        assert!(menu.current_slices.iter().any(|s| s.id == "file_converter"));
+        assert!(menu.current_slices.iter().any(|s| s.id == "terminal_here"));
+        assert!(menu.current_slices.iter().any(|s| s.id == "copy_path"));
+        assert!(menu.current_slices.iter().any(|s| s.id == "new_folder"));
+
+        let conv = menu.current_slices.iter().find(|s| s.id == "file_converter").unwrap();
+        assert!(conv.has_sub_tier);
+        assert_eq!(conv.sub_tier_type, Some(SubTierType::FileConverter));
+    }
+
+    #[test]
+    fn test_file_converter_sub_tier() {
+        let mut menu = MenuState::new(RadialConfig::default(), false);
+        menu.context = Context::FileManager;
+
+        // 1. Single PPTX document
+        menu.selected_files = vec!["/home/astro/Downloads/deck.pptx".to_string()];
+        menu.open_sub_tier(1, SubTierType::FileConverter);
+        assert_eq!(menu.active_sub_tier, Some(SubTierType::FileConverter));
+        assert!(menu.sub_slices.iter().any(|s| s.label == "Convert to PDF"));
+
+        // 2. Single PNG image
+        menu.selected_files = vec!["/home/astro/Downloads/logo.png".to_string()];
+        menu.open_sub_tier(1, SubTierType::FileConverter);
+        assert!(menu.sub_slices.iter().any(|s| s.label == "To .ico"));
+        assert!(menu.sub_slices.iter().any(|s| s.label == "To JPG"));
+
+        // 3. Multiple files (Choice of Merge or Individual)
+        menu.selected_files = vec![
+            "/home/astro/Downloads/img1.png".to_string(),
+            "/home/astro/Downloads/img2.png".to_string(),
+        ];
+        menu.open_sub_tier(1, SubTierType::FileConverter);
+        // Choice A: Merge
+        assert!(menu.sub_slices.iter().any(|s| s.label == "Merge to PDF"));
+        // Choice B: Individual
+        assert!(menu.sub_slices.iter().any(|s| s.label == "Each to .ico"));
+        assert!(menu.sub_slices.iter().any(|s| s.label == "Each to JPG"));
+
+        // Hub hover content
+        menu.outer_hovered_index = 0;
+        let (icon, label) = menu.active_hover_hub_content();
+        assert!(icon.is_some());
+        assert_eq!(label, menu.sub_slices[0].label);
     }
 }

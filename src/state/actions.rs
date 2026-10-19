@@ -70,6 +70,17 @@ pub enum ActionId {
     CodeFormat,
     CodePalette,
     CodeRun,
+    // Context: File Manager
+    FileConverter,
+    ConvertFile {
+        files: Vec<String>,
+        target_format: String,
+        merge: bool,
+    },
+    OpenTerminalHere { path: String },
+    CopyFilePath { path: String },
+    CreateNewFolder { path: String },
+    PickAndConvertFile,
     // Dynamic sub-ring items
     FocusWindow { address: String, workspace: String },
     SwitchToTab(usize),
@@ -141,6 +152,10 @@ impl ActionId {
             "code_format" => Some(ActionId::CodeFormat),
             "code_palette" => Some(ActionId::CodePalette),
             "code_run" => Some(ActionId::CodeRun),
+            "file_converter" | "fileconverter" | "convert_file" => Some(ActionId::FileConverter),
+            "terminal_here" | "open_terminal_here" => Some(ActionId::OpenTerminalHere { path: String::new() }),
+            "copy_path" | "copy_file_path" => Some(ActionId::CopyFilePath { path: String::new() }),
+            "new_folder" | "create_folder" => Some(ActionId::CreateNewFolder { path: String::new() }),
             _ => None,
         }
     }
@@ -154,6 +169,7 @@ pub enum SubTierType {
     Scratchpad,
     BrowserTabs,
     FileJump,
+    FileConverter,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -710,6 +726,43 @@ pub fn function_catalogue() -> Vec<ActionDef> {
             has_sub_tier: false,
             sub_tier_type: None,
         },
+        // File Manager Actions
+        ActionDef {
+            id: "file_converter",
+            label: "File Converter",
+            icon: "swap_horiz",
+            category: "File Manager",
+            desc: "Convert or merge selected files",
+            has_sub_tier: true,
+            sub_tier_type: Some(SubTierType::FileConverter),
+        },
+        ActionDef {
+            id: "terminal_here",
+            label: "Terminal Here",
+            icon: "terminal",
+            category: "File Manager",
+            desc: "Open terminal in current directory",
+            has_sub_tier: false,
+            sub_tier_type: None,
+        },
+        ActionDef {
+            id: "copy_path",
+            label: "Copy Path",
+            icon: "content_copy",
+            category: "File Manager",
+            desc: "Copy directory or file path to clipboard",
+            has_sub_tier: false,
+            sub_tier_type: None,
+        },
+        ActionDef {
+            id: "new_folder",
+            label: "New Folder",
+            icon: "create_new_folder",
+            category: "File Manager",
+            desc: "Create a new directory",
+            has_sub_tier: false,
+            sub_tier_type: None,
+        },
     ]
 }
 
@@ -753,6 +806,18 @@ pub fn resolve_slice_item_with_window(
                     pid: win_pid,
                     title: win_title.clone(),
                 }),
+                "terminal_here" => {
+                    let dir = crate::ipc::converter::resolve_filemanager_dir(win_pid, &win_title, &[]);
+                    Some(ActionId::OpenTerminalHere { path: dir.to_string_lossy().to_string() })
+                }
+                "copy_path" => {
+                    let dir = crate::ipc::converter::resolve_filemanager_dir(win_pid, &win_title, &[]);
+                    Some(ActionId::CopyFilePath { path: dir.to_string_lossy().to_string() })
+                }
+                "new_folder" => {
+                    let dir = crate::ipc::converter::resolve_filemanager_dir(win_pid, &win_title, &[]);
+                    Some(ActionId::CreateNewFolder { path: dir.to_string_lossy().to_string() })
+                }
                 _ => ActionId::from_id(def.id),
             }
         };
@@ -782,6 +847,18 @@ pub fn resolve_slice_item_with_window(
                 pid: win_pid,
                 title: win_title.clone(),
             }),
+            "terminal_here" => {
+                let dir = crate::ipc::converter::resolve_filemanager_dir(win_pid, &win_title, &[]);
+                Some(ActionId::OpenTerminalHere { path: dir.to_string_lossy().to_string() })
+            }
+            "copy_path" => {
+                let dir = crate::ipc::converter::resolve_filemanager_dir(win_pid, &win_title, &[]);
+                Some(ActionId::CopyFilePath { path: dir.to_string_lossy().to_string() })
+            }
+            "new_folder" => {
+                let dir = crate::ipc::converter::resolve_filemanager_dir(win_pid, &win_title, &[]);
+                Some(ActionId::CreateNewFolder { path: dir.to_string_lossy().to_string() })
+            }
             _ => ActionId::from_id(fn_id),
         };
         SliceItem {
@@ -1267,6 +1344,27 @@ pub fn get_command(action: &ActionId) -> Option<String> {
             let exp = shellexpand::tilde(path).to_string();
             Some(format!("(dolphin \"{}\" || xdg-open \"{}\") &", exp, exp))
         },
+        ActionId::OpenTerminalHere { path } => {
+            let exp = shellexpand::tilde(path).to_string();
+            Some(format!(
+                "(kitty --directory \"{}\" || alacritty --working-directory \"{}\" || foot -D \"{}\" || konsole --workdir \"{}\" || kitty || xterm) &",
+                exp, exp, exp, exp
+            ))
+        }
+        ActionId::CopyFilePath { path } => {
+            let exp = shellexpand::tilde(path).to_string();
+            Some(format!(
+                "printf '%s' \"{}\" | wl-copy && notify-send -a 'Radial Dial' 'Path Copied' \"{}\" &",
+                exp, exp
+            ))
+        }
+        ActionId::CreateNewFolder { path } => {
+            let exp = shellexpand::tilde(path).to_string();
+            Some(format!(
+                "name=$(kdialog --inputbox 'Enter folder name:' 'New Folder') && [ -n \"$name\" ] && mkdir -p \"{}/$name\" && notify-send -a 'Radial Dial' 'Folder Created' \"{}/$name\" &",
+                exp, exp
+            ))
+        }
         ActionId::Scratchpad => Some("hyprctl dispatch \"hl.dsp.window.move({ workspace = 'special:special' })\" 2>/dev/null || hyprctl dispatch movetoworkspace special:special".into()),
         _ => None,
     }
@@ -1283,6 +1381,12 @@ pub fn execute(action: &ActionId) {
         }
         ActionId::KittyNewWindow { pid, title } => {
             open_terminal_new_window(*pid, title);
+        }
+        ActionId::ConvertFile { files, target_format, merge } => {
+            crate::ipc::converter::execute_conversion(files, target_format, *merge);
+        }
+        ActionId::PickAndConvertFile => {
+            crate::ipc::converter::pick_and_convert_dialog();
         }
         _ => {
             if let Some(cmd) = get_command(action) {
@@ -1746,5 +1850,25 @@ mod tests {
         assert!(extract_path_from_title("~/Documents - fish").is_some());
         assert!(extract_path_from_title("~ - fish").is_some());
         assert!(extract_path_from_title("nonexistent_random_xyz_title_12345").is_none());
+    }
+
+    #[test]
+    fn test_filemanager_actions_resolve() {
+        let conv = resolve_slice_item("file_converter", 0, false);
+        assert!(conv.has_sub_tier);
+        assert_eq!(conv.sub_tier_type, Some(SubTierType::FileConverter));
+
+        let term = resolve_slice_item("terminal_here", 1, false);
+        assert!(!term.has_sub_tier);
+        assert!(matches!(term.action, Some(ActionId::OpenTerminalHere { .. })));
+        if let Some(cmd) = get_command(term.action.as_ref().unwrap()) {
+            assert!(cmd.contains("kitty") || cmd.contains("terminal"));
+        }
+
+        let copy = resolve_slice_item("copy_path", 2, false);
+        assert!(matches!(copy.action, Some(ActionId::CopyFilePath { .. })));
+
+        let new_folder = resolve_slice_item("new_folder", 3, false);
+        assert!(matches!(new_folder.action, Some(ActionId::CreateNewFolder { .. })));
     }
 }

@@ -46,6 +46,9 @@ pub struct RadialConfig {
     #[serde(rename = "mediaSlices", default = "default_media_slices")]
     pub media_slices: Vec<String>,
 
+    #[serde(rename = "filemanagerSlices", alias = "dolphinSlices", default = "default_filemanager_slices")]
+    pub filemanager_slices: Vec<String>,
+
     #[serde(rename = "fileJumpTargets", default = "default_file_jump_targets")]
     pub file_jump_targets: Vec<FileJumpTarget>,
 
@@ -91,6 +94,11 @@ fn default_code_slices() -> Vec<String> {
 
 fn default_media_slices() -> Vec<String> {
     vec!["scratchpad", "media_play_pause", "media_prev", "media_next", "volume_up", "volume_down", "audio_sink", "active_apps"]
+        .into_iter().map(String::from).collect()
+}
+
+fn default_filemanager_slices() -> Vec<String> {
+    vec!["scratchpad", "file_converter", "terminal_here", "copy_path", "new_folder", "filejump", "active_apps"]
         .into_iter().map(String::from).collect()
 }
 
@@ -317,11 +325,12 @@ impl RadialConfig {
     /// Context strings: "kitty", "browser", "code", "media", "default"
     pub fn get_active_slice_ids(&self, context: &str) -> Vec<String> {
         let mut ids = match context {
-            "kitty"   => self.kitty_slices.clone(),
-            "browser" => self.browser_slices.clone(),
-            "code"    => self.code_slices.clone(),
-            "media"   => self.media_slices.clone(),
-            _         => self.global_slices.clone(),
+            "kitty"                   => self.kitty_slices.clone(),
+            "browser"                 => self.browser_slices.clone(),
+            "code"                    => self.code_slices.clone(),
+            "media"                   => self.media_slices.clone(),
+            "filemanager" | "dolphin" => self.filemanager_slices.clone(),
+            _                         => self.global_slices.clone(),
         };
         // Ensure "active_apps" always present (port of QML behavior)
         if !ids.contains(&"active_apps".to_string()) {
@@ -377,11 +386,12 @@ impl RadialConfig {
 
     fn slices_mut(&mut self, context: &str) -> &mut Vec<String> {
         match context {
-            "kitty"   => &mut self.kitty_slices,
-            "browser" => &mut self.browser_slices,
-            "code"    => &mut self.code_slices,
-            "media"   => &mut self.media_slices,
-            _         => &mut self.global_slices,
+            "kitty"                   => &mut self.kitty_slices,
+            "browser"                 => &mut self.browser_slices,
+            "code"                    => &mut self.code_slices,
+            "media"                   => &mut self.media_slices,
+            "filemanager" | "dolphin" => &mut self.filemanager_slices,
+            _                         => &mut self.global_slices,
         }
     }
 
@@ -426,11 +436,12 @@ impl RadialConfig {
     /// Reset slices for a specific context to default factory slices
     pub fn reset_context(&mut self, context: &str) {
         match context {
-            "kitty"   => self.kitty_slices = default_kitty_slices(),
-            "browser" => self.browser_slices = default_browser_slices(),
-            "code"    => self.code_slices = default_code_slices(),
-            "media"   => self.media_slices = default_media_slices(),
-            _         => self.global_slices = default_global_slices(),
+            "kitty"                   => self.kitty_slices = default_kitty_slices(),
+            "browser"                 => self.browser_slices = default_browser_slices(),
+            "code"                    => self.code_slices = default_code_slices(),
+            "media"                   => self.media_slices = default_media_slices(),
+            "filemanager" | "dolphin" => self.filemanager_slices = default_filemanager_slices(),
+            _                         => self.global_slices = default_global_slices(),
         }
     }
 
@@ -448,6 +459,7 @@ impl Default for RadialConfig {
             browser_slices: default_browser_slices(),
             code_slices: default_code_slices(),
             media_slices: default_media_slices(),
+            filemanager_slices: default_filemanager_slices(),
             file_jump_targets: default_file_jump_targets(),
             performance: None,
             custom_colors: None,
@@ -493,6 +505,12 @@ mod tests {
     }
 
     #[test]
+    fn test_default_filemanager_slices() {
+        let cfg = RadialConfig::default();
+        assert_eq!(cfg.filemanager_slices, vec!["scratchpad","file_converter","terminal_here","copy_path","new_folder","filejump","active_apps"]);
+    }
+
+    #[test]
     fn test_get_active_slice_ids_adds_active_apps() {
         let mut cfg = RadialConfig::default();
         cfg.global_slices = vec!["terminal".into(), "calc".into()]; // no active_apps
@@ -507,6 +525,8 @@ mod tests {
         assert_eq!(cfg.get_active_slice_ids("browser"), cfg.browser_slices);
         assert_eq!(cfg.get_active_slice_ids("code"), cfg.code_slices);
         assert_eq!(cfg.get_active_slice_ids("media"), cfg.media_slices);
+        assert_eq!(cfg.get_active_slice_ids("filemanager"), cfg.filemanager_slices);
+        assert_eq!(cfg.get_active_slice_ids("dolphin"), cfg.filemanager_slices);
         assert_eq!(cfg.get_active_slice_ids("other"), cfg.global_slices);
     }
 

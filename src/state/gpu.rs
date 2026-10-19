@@ -130,6 +130,7 @@ mod tests {
             browser_slices: vec![],
             code_slices: vec![],
             media_slices: vec![],
+            filemanager_slices: vec![],
             file_jump_targets: vec![],
             performance: Some(PerformanceConfig {
                 profile: profile.map(String::from),
